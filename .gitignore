@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Virtual env
+.venv/
+venv/
+
+# PyInstaller artefacts
+build/
+dist/
+
+# Local test output (migrated savegames, dumps)
+out/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+
+# OS junk
+Thumbs.db
+.DS_Store
