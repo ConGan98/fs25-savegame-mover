@@ -1,8 +1,19 @@
 [project]
 name = "fs25-savegame-mover"
-version = "0.1.0"
-description = "Migrate a Farming Simulator 25 farm (vehicles, grains, animals, bales, money) from one map to another via a PDA-styled GUI."
+version = "0.2.0"
+description = "Migrate a Farming Simulator 25 farm (vehicles, animals, grain, bales, money) from one map savegame to another, via a PDA-styled GUI."
+readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.11"
+authors = [{ name = "Conor Gannon" }]
+keywords = ["fs25", "farming-simulator", "savegame", "migration", "pyside6"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Environment :: X11 Applications :: Qt",
+    "Topic :: Games/Entertainment :: Simulation",
+]
 dependencies = [
     "lxml>=5.0",
     "PySide6>=6.6",
@@ -10,12 +21,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=8.0",
-]
+dev = ["pyinstaller>=6.0"]
 
 [project.scripts]
 fs25-mover = "fs25_mover.__main__:main"
+
+[project.urls]
+Repository = "https://github.com/ConGan98/fs25-savegame-mover"
+Issues = "https://github.com/ConGan98/fs25-savegame-mover/issues"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -23,6 +36,3 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]

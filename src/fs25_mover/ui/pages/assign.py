@@ -8,6 +8,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
@@ -43,6 +44,7 @@ class AssignPage(QWizardPage):
         self.drop_label = QLabel("Vehicle drop zone: <not set — right-click the map>")
         self.silo_combos: dict[str, QComboBox] = {}
         self.pen_combos: dict[str, QComboBox] = {}
+        self.storage_combos: dict[str, QComboBox] = {}
 
         # Heading picker.
         self.yaw_combo = QComboBox()
@@ -123,13 +125,9 @@ class AssignPage(QWizardPage):
         img = dds_to_qimage(dds)
         self.view = PdaView(img, world_size=world_size, playable_px=playable_px)
         self.view.add_origin_crosshair()
-        # Only render the placeables the user is actually choosing between on
-        # this page (silos + pens). Sheds, productions, sellpoints, etc. are
-        # noise here and will be added later behind category toggles.
-        relevant = {"silo", "pen"}
+        # Render every POI into its category sub-group so the toggle row can
+        # show/hide them independently. Defaults set after creation.
         for poi in state.target_pois:
-            if poi.category not in relevant:
-                continue
             self.view.add_marker(
                 Marker(
                     label=poi.label,
@@ -137,16 +135,24 @@ class AssignPage(QWizardPage):
                     world_z=poi.world_z,
                     color=QColor(CATEGORY_COLOR.get(poi.category, "#cccccc")),
                     radius_px=7.0,
-                )
+                ),
+                category=poi.category,
             )
+
+        # Toggle row above the PDA: silo/pen/storage on by default; the rest off.
+        self._default_visible = {"silo", "pen", "storage"}
+        self._category_checks: dict[str, QCheckBox] = {}
+        toggle_row = self._build_category_toggle_row(state.target_pois)
         self.view.clicked_world.connect(self._on_pda_clicked)
-        self._left.insertWidget(0, self.view, 1)
+        self._left.insertLayout(0, toggle_row)
+        self._left.insertWidget(1, self.view, 1)
         # Fit after the widget has a non-zero size.
         self.view.showEvent = self._wrap_first_show(self.view.showEvent)
 
-        # --- Right side: dropdowns for silos and pens ---
+        # --- Right side: dropdowns for silos, pens, and bale/pallet storage ---
         self._build_silo_section(state)
         self._build_pen_section(state)
+        self._build_storage_section(state)
         self._right.addStretch(1)
 
     def _wrap_first_show(self, original):
@@ -158,6 +164,37 @@ class AssignPage(QWizardPage):
                 called["v"] = True
                 view.fit_image()
         return wrapped
+
+    def _build_category_toggle_row(self, pois):
+        """Row of checkboxes — one per POI category that has at least one marker.
+        Defaults: silo/pen/storage = on, everything else = off."""
+        from collections import Counter
+        from PySide6.QtCore import Qt
+
+        counts: Counter = Counter(p.category for p in pois)
+        # Stable, ordered list of categories that exist on this map.
+        order = ["silo", "pen", "storage", "sell", "production", "shop", "shed", "other"]
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Show on map:"))
+        for cat in order:
+            n = counts.get(cat, 0)
+            if n == 0:
+                continue
+            color = CATEGORY_COLOR.get(cat, "#cccccc")
+            cb = QCheckBox(f"{cat} ({n})")
+            cb.setChecked(cat in self._default_visible)
+            # Tint the checkbox text in the category colour so it's obvious.
+            cb.setStyleSheet(f"QCheckBox {{ color: {color}; font-weight: bold; }}")
+            cb.toggled.connect(lambda checked, c=cat: self._on_category_toggled(c, checked))
+            self._category_checks[cat] = cb
+            row.addWidget(cb)
+            # Apply default visibility right away.
+            self.view.set_category_visible(cat, cat in self._default_visible)
+        row.addStretch(1)
+        return row
+
+    def _on_category_toggled(self, category: str, checked: bool) -> None:
+        self.view.set_category_visible(category, checked)
 
     def _yaw_changed(self) -> None:
         self._wizard.state.vehicle_yaw_deg = float(self.yaw_combo.currentData() or 0.0)
@@ -183,13 +220,45 @@ class AssignPage(QWizardPage):
         self.completeChanged.emit()
 
     def _build_silo_section(self, state) -> None:
-        # Source silos with content; only <fillUnit> grain (bunker silage is skipped).
+        # Source silos with stored grain / diesel / fertiliser etc. FS25 uses
+        # two shapes:
+        #   - <fillUnit><unit fillType="WHEAT" fillLevel="..."/></fillUnit>
+        #   - <silo><storage><node fillType="WHEAT" fillLevel="..."/></storage></silo>
+        # We accept either. <storage> entries inside <husbandry> are ignored
+        # (those are pen-internal stores).
+        from collections import Counter
         src_grain = []
         for placeable in state.source_sg.placeables():
-            units = placeable.findall(".//fillUnit/unit")
-            grain = sum(float(u.get("fillLevel") or 0) for u in units)
-            if grain > 0:
-                src_grain.append((placeable, grain))
+            per_ft: Counter = Counter()
+            for u in placeable.findall(".//fillUnit/unit"):
+                ft = u.get("fillType") or "?"
+                try:
+                    fl = float(u.get("fillLevel") or 0)
+                except ValueError:
+                    fl = 0.0
+                if fl > 0:
+                    per_ft[ft] += fl
+            for storage in placeable.findall(".//storage"):
+                # Skip husbandry-internal storage.
+                anc = storage.getparent()
+                under_husbandry = False
+                while anc is not None and anc is not placeable:
+                    if anc.tag == "husbandry":
+                        under_husbandry = True
+                        break
+                    anc = anc.getparent()
+                if under_husbandry:
+                    continue
+                for node in storage.findall("node"):
+                    ft = node.get("fillType") or "?"
+                    try:
+                        fl = float(node.get("fillLevel") or 0)
+                    except ValueError:
+                        fl = 0.0
+                    if fl > 0:
+                        per_ft[ft] += fl
+            if per_ft:
+                src_grain.append((placeable, per_ft))
 
         target_silos = [
             p for p in state.target_pois
@@ -201,9 +270,11 @@ class AssignPage(QWizardPage):
         if not src_grain:
             form.addRow(QLabel("(No loose grain in source silos to migrate.)"))
         else:
-            for placeable, total in src_grain:
+            for placeable, per_ft in src_grain:
                 uid = placeable.get("uniqueId") or ""
-                src_label = f"{placeable.get('filename', '?').rsplit('/', 1)[-1]}  ({total:,.0f} kg)"
+                summary = ", ".join(f"{int(v):,} {ft}" for ft, v in per_ft.most_common())
+                fn = (placeable.get("filename", "?") or "?").rsplit("/", 1)[-1]
+                src_label = f"{fn}  ({summary})"
                 combo = QComboBox()
                 combo.addItem("(skip)", "")
                 for t in target_silos:
@@ -226,6 +297,38 @@ class AssignPage(QWizardPage):
 
         box = QGroupBox("Animal pens")
         form = QFormLayout()
+
+        # Toggle: also move everything in the husbandry's <storage> — food
+        # (hay / grass / silage / TMR / grain / forage), bedding (straw),
+        # water, and produced outputs (slurry / manure / milk).
+        self.husb_storage_check = QCheckBox(
+            "Also move food, water, bedding and produced slurry/milk stored in the pen"
+        )
+        self.husb_storage_check.setChecked(state.include_husbandry_storage)
+        self.husb_storage_check.toggled.connect(self._husb_storage_toggled)
+        form.addRow(self.husb_storage_check)
+
+        # Optional silage cash-out — preview the value live.
+        from ...migrate.silage_sale import (
+            silage_avg_price_per_litre,
+            total_bunker_silage,
+        )
+        litres, n_bunkers = total_bunker_silage(state.source_sg)
+        price = silage_avg_price_per_litre(state.source_sg) if litres > 0 else 0.0
+        proceeds = litres * price
+        if litres > 0:
+            label_txt = (
+                f"Sell bunker silage instead of losing it  "
+                f"({litres:,.0f} L × ${price:.4f}/L = ${proceeds:,.0f} added to farm money)"
+            )
+        else:
+            label_txt = "Sell bunker silage instead of losing it  (no silage to sell)"
+        self.sell_silage_check = QCheckBox(label_txt)
+        self.sell_silage_check.setChecked(state.sell_bunker_silage)
+        self.sell_silage_check.setEnabled(litres > 0)
+        self.sell_silage_check.toggled.connect(self._sell_silage_toggled)
+        form.addRow(self.sell_silage_check)
+
         if not src_pens:
             form.addRow(QLabel("(No populated pens in source save.)"))
         else:
@@ -246,6 +349,88 @@ class AssignPage(QWizardPage):
                 form.addRow(QLabel(src_label), combo)
         box.setLayout(form)
         self._right.addWidget(box)
+
+    def _husb_storage_toggled(self, checked: bool) -> None:
+        self._wizard.state.include_husbandry_storage = checked
+
+    def _sell_silage_toggled(self, checked: bool) -> None:
+        self._wizard.state.sell_bunker_silage = checked
+
+    def _build_storage_section(self, state) -> None:
+        # Source placeables with <objectStorage> that has content.
+        from collections import Counter
+        src_storage = []
+        for p in state.source_sg.placeables():
+            objs = p.findall(".//objectStorage/object")
+            if objs:
+                src_storage.append((p, objs))
+
+        # Target candidates: any placeable that has an <objectStorage> element
+        # (even empty). This catches placeables whose primary category is
+        # "pen" or "silo" but which ALSO act as auto-storage (e.g. multi-purpose
+        # mod sheds). We synthesize a tiny POI-like row for the dropdown.
+        from ...model.poi import PoiMarker
+        target_storage = []
+        # Match each target placeable to a known POI marker (for position) when
+        # possible — otherwise use a (0,0) placeholder for the label.
+        poi_by_uid = {p.uid: p for p in state.target_pois}
+        for tp in state.target_sg.placeables():
+            if tp.find(".//objectStorage") is None:
+                continue
+            uid = tp.get("uniqueId") or ""
+            farm_id = tp.get("farmId")
+            # Only show targets owned by farm 1 or 0 (player-accessible).
+            if farm_id not in ("1", "0"):
+                continue
+            existing = poi_by_uid.get(uid)
+            if existing is not None:
+                target_storage.append(existing)
+            else:
+                label = (tp.get("filename") or "?").rsplit("/", 1)[-1].rsplit(".", 1)[0]
+                target_storage.append(PoiMarker(
+                    uid=uid, label=label, category="storage",
+                    world_x=0.0, world_z=0.0, farm_id=int(farm_id) if farm_id else None,
+                ))
+
+        box = QGroupBox("Bale / pallet storage sheds (auto-storage)")
+        form = QFormLayout()
+        if not src_storage:
+            form.addRow(QLabel("(No source placeables with stored bales/pallets.)"))
+        else:
+            for placeable, objs in src_storage:
+                uid = placeable.get("uniqueId") or ""
+                # Count by className + fillType so the user knows what's inside.
+                cnt: Counter = Counter()
+                for o in objs:
+                    kind = "Bale" if o.get("className") == "Bale" else "Pallet"
+                    ft = o.get("fillType") or "?"
+                    cnt[(kind, ft)] += 1
+                summary = "  ".join(
+                    f"{n}× {kind} {ft}" for (kind, ft), n in cnt.most_common()
+                )
+                src_label = f"{placeable.get('filename', '?').rsplit('/', 1)[-1]}  {summary}"
+                combo = QComboBox()
+                combo.addItem("(skip)", "")
+                for t in target_storage:
+                    combo.addItem(f"{t.label}  ({t.world_x:.0f}, {t.world_z:.0f})", t.uid)
+                combo.currentIndexChanged.connect(self._storage_changed)
+                self.storage_combos[uid] = combo
+                form.addRow(QLabel(src_label), combo)
+            if not target_storage:
+                form.addRow(QLabel(
+                    "<i>No auto-storage sheds on the target map. Place one in-game first, "
+                    "then re-run the wizard if you want to migrate these.</i>"
+                ))
+        box.setLayout(form)
+        self._right.addWidget(box)
+
+    def _storage_changed(self) -> None:
+        self._wizard.state.storage_mapping = {
+            src_uid: c.currentData()
+            for src_uid, c in self.storage_combos.items()
+            if c.currentData()
+        }
+        self.completeChanged.emit()
 
     def _silo_changed(self) -> None:
         self._wizard.state.silo_mapping = {

@@ -15,9 +15,10 @@ dist/
 # Local test output (migrated savegames, dumps)
 out/
 
-# Editor / IDE
+# Editor / IDE / agent state
 .vscode/
 .idea/
+.claude/
 *.swp
 
 # OS junk

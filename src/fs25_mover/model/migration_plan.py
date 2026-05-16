@@ -21,6 +21,7 @@ class MigrationPlan:
     move_silos: bool = True
     move_animals: bool = True
     move_money: bool = True
+    move_object_storage: bool = True
 
     # Vehicle / item drop zone on the new map (world coords). drop_xyz.y should
     # be terrain height + small headroom (e.g. +0.3m) so vehicles spawn on the
@@ -37,9 +38,20 @@ class MigrationPlan:
     # If true, repositions bales/pallets to drop_xyz; otherwise keeps source coords.
     reposition_items: bool = True
 
+    # When migrating animals, also copy the source husbandry's <storage>
+    # (slurry / straw / manure / milk fill levels) onto the target pen.
+    include_husbandry_storage: bool = True
+
+    # If true, sell every bunker silo's silage at the source map's economy
+    # price and add the proceeds to the target farm's money (instead of just
+    # losing the silage on migration).
+    sell_bunker_silage: bool = False
+
     # Per-placeable mappings, source uniqueId -> target uniqueId.
     silo_mapping: dict[str, str] = field(default_factory=dict)
     pen_mapping: dict[str, str] = field(default_factory=dict)
+    # Auto-storage sheds (bales / pallets stored inside <objectStorage>).
+    storage_mapping: dict[str, str] = field(default_factory=dict)
 
     # Farm ids
     src_farm_id: int = 1

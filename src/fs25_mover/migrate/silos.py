@@ -65,7 +65,7 @@ def migrate_silos(
             result.skipped.append(src_uid)
             continue
 
-        # --- <fillUnit><unit/></fillUnit> grain storage ---
+        # --- <fillUnit><unit/></fillUnit> grain storage (older shape) ---
         src_fu = src_p.find(".//fillUnit")
         tgt_fu = tgt_p.find(".//fillUnit")
         if src_fu is not None:
@@ -91,4 +91,75 @@ def migrate_silos(
                     tgt_unit.set("fillLevel", f"{cur + src_level:.6f}")
                 result.fillunit_moves.append((src_uid, tgt_uid, ft, src_level))
 
+        # --- <silo><storage><node/></storage></silo> grain storage (FS25 shape) ---
+        # Skip husbandries — their storage holds slurry/feed and is migrated by
+        # the animal-pen path.
+        for src_storage in _silo_storages(src_p):
+            tgt_storage = _ensure_silo_storage_match(tgt_p, src_storage)
+            if tgt_storage is None:
+                continue
+            tgt_nodes_by_ft = {n.get("fillType"): n for n in tgt_storage.findall("node")}
+            for src_node in src_storage.findall("node"):
+                ft = src_node.get("fillType")
+                try:
+                    src_level = float(src_node.get("fillLevel") or 0)
+                except ValueError:
+                    continue
+                if not ft or src_level <= 0:
+                    continue
+                tgt_node = tgt_nodes_by_ft.get(ft)
+                if tgt_node is None:
+                    tgt_node = etree.SubElement(tgt_storage, "node",
+                                                fillType=ft, fillLevel="0")
+                    tgt_nodes_by_ft[ft] = tgt_node
+                try:
+                    cur = float(tgt_node.get("fillLevel") or 0)
+                except ValueError:
+                    cur = 0.0
+                tgt_node.set("fillLevel", f"{cur + src_level:.6f}")
+                result.fillunit_moves.append((src_uid, tgt_uid, ft, src_level))
+
     return result
+
+
+def _silo_storages(placeable: etree._Element):
+    """Yield every `<storage>` element under a placeable that represents a silo
+    bin (i.e. NOT inside a husbandry). Each yielded element contains <node>
+    fillType / fillLevel children."""
+    for storage in placeable.findall(".//storage"):
+        # Walk up parents to confirm it's not under <husbandry>.
+        ancestor = storage.getparent()
+        in_husbandry = False
+        while ancestor is not None and ancestor is not placeable:
+            if ancestor.tag == "husbandry":
+                in_husbandry = True
+                break
+            ancestor = ancestor.getparent()
+        if in_husbandry:
+            continue
+        yield storage
+
+
+def _ensure_silo_storage_match(target: etree._Element, src_storage: etree._Element):
+    """Find a target <storage> with the same `index` as src (or first if no
+    index attr), or create one alongside the source's parent shape. Returns
+    None when we can't safely create a matching target (no <silo> parent)."""
+    src_index = src_storage.get("index")
+    candidates = list(_silo_storages(target))
+    if src_index is not None:
+        for c in candidates:
+            if c.get("index") == src_index:
+                return c
+    elif candidates:
+        return candidates[0]
+    # Nothing to merge into — only create when target has a <silo> parent to
+    # host the new storage block, otherwise the file shape would be invalid.
+    silo_parent = target.find("silo")
+    if silo_parent is None:
+        return None
+    new_storage = etree.SubElement(silo_parent, "storage")
+    if src_index is not None:
+        new_storage.set("index", src_index)
+    if src_storage.get("farmId") is not None:
+        new_storage.set("farmId", src_storage.get("farmId"))
+    return new_storage

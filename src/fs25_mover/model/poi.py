@@ -29,6 +29,7 @@ PRODUCTION_KEYWORDS = ("production", "bakery", "dairy", "sawmill", "carpenter",
 CATEGORY_COLOR = {
     "silo":       "#ffd34d",   # yellow
     "pen":        "#66ddff",   # cyan
+    "storage":    "#ff7fbf",   # pink — bale/pallet object-storage sheds
     "shop":       "#ff9966",   # orange
     "sell":       "#aaff88",   # green
     "production": "#cc99ff",   # purple
@@ -47,6 +48,24 @@ class PoiMarker:
     farm_id: int | None
 
 
+def _has_non_husbandry_storage_node(placeable) -> bool:
+    """True when the placeable has a <storage><node/></storage> NOT inside a
+    <husbandry> block (i.e. a grain/diesel/fertiliser silo bin)."""
+    for storage in placeable.findall(".//storage"):
+        if storage.find("node") is None:
+            continue
+        anc = storage.getparent()
+        while anc is not None and anc is not placeable:
+            if anc.tag == "husbandry":
+                break
+            anc = anc.getparent()
+        else:
+            return True
+        if anc is not None and anc.tag == "husbandry":
+            continue
+    return False
+
+
 def _classify(placeable, uid: str, filename: str | None) -> tuple[str, str]:
     """Return (category, short_label) for a placeable.
 
@@ -60,7 +79,16 @@ def _classify(placeable, uid: str, filename: str | None) -> tuple[str, str]:
     # --- Step 1: structural classification ---
     if placeable.find(".//husbandryAnimals") is not None or placeable.find("husbandry") is not None:
         cat = "pen"
-    elif placeable.find(".//bunkerSilo") is not None or placeable.find(".//fillUnit/unit") is not None:
+    elif placeable.find(".//objectStorage") is not None:
+        # Bale / pallet auto-storage sheds. Classify by element presence
+        # (an empty shed on a fresh save still has the element).
+        cat = "storage"
+    elif (
+        placeable.find(".//bunkerSilo") is not None
+        or placeable.find(".//fillUnit/unit") is not None
+        or placeable.find("silo") is not None
+        or _has_non_husbandry_storage_node(placeable)
+    ):
         cat = "silo"
     elif placeable.find(".//sellingStation") is not None:
         cat = "sell"

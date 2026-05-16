@@ -23,6 +23,7 @@ from PySide6.QtGui import (
     QPainter,
     QPen,
     QPixmap,
+    QTransform,
     QWheelEvent,
 )
 from PySide6.QtWidgets import (
@@ -31,7 +32,6 @@ from PySide6.QtWidgets import (
     QGraphicsItemGroup,
     QGraphicsLineItem,
     QGraphicsPixmapItem,
-    QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
@@ -68,6 +68,9 @@ class PdaView(QGraphicsView):
         scene.addItem(self._pix_item)
         self._marker_layer = QGraphicsItemGroup()
         scene.addItem(self._marker_layer)
+        # Sub-groups by category — lets callers toggle whole categories on/off
+        # in one call. Created lazily by `_group_for(category)`.
+        self._category_groups: dict[str, QGraphicsItemGroup] = {}
         self.setScene(scene)
 
         self.setRenderHints(
@@ -119,8 +122,25 @@ class PdaView(QGraphicsView):
         for child in list(self._marker_layer.childItems()):
             self._marker_layer.removeFromGroup(child)
             self.scene().removeItem(child)
+        self._category_groups.clear()
 
-    def add_marker(self, m: Marker) -> None:
+    def _group_for(self, category: str | None) -> QGraphicsItemGroup:
+        """Get-or-create the sub-group for a category."""
+        key = category or ""
+        g = self._category_groups.get(key)
+        if g is None:
+            g = QGraphicsItemGroup(parent=self._marker_layer)
+            self._category_groups[key] = g
+        return g
+
+    def set_category_visible(self, category: str, visible: bool) -> None:
+        """Show or hide every marker added under this category."""
+        g = self._category_groups.get(category)
+        if g is not None:
+            g.setVisible(visible)
+
+    def add_marker(self, m: Marker, category: str | None = None) -> None:
+        group = self._group_for(category) if category else self._marker_layer
         scene_pos = self.world_to_scene(m.world_x, m.world_z)
         r = m.radius_px
         dot = QGraphicsEllipseItem(-r, -r, 2 * r, 2 * r)
@@ -130,40 +150,22 @@ class PdaView(QGraphicsView):
         dot.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
         dot.setPos(scene_pos)
         dot.setToolTip(f"{m.label}\n({m.world_x:.1f}, {m.world_z:.1f})")
-        self._marker_layer.addToGroup(dot)
+        group.addToGroup(dot)
 
         if m.label:
             f = QFont()
             f.setPointSize(10)
             f.setBold(True)
             metrics = QFontMetricsF(f)
-            text_w = metrics.horizontalAdvance(m.label)
             text_h = metrics.height()
-            pad_x, pad_y = 5.0, 2.0
-            text_x = scene_pos.x() + r + 4
-            text_y = scene_pos.y() - text_h / 2
-
-            # Dark rounded background "chip" so the label is readable over any
-            # map colour. setRect on a QGraphicsRectItem gives sharp corners;
-            # painted under the text in scene order.
-            bg = QGraphicsRectItem(
-                text_x - pad_x,
-                text_y - pad_y,
-                text_w + pad_x * 2,
-                text_h + pad_y * 2,
-            )
-            bg.setBrush(QBrush(QColor(20, 25, 20, 200)))  # dark olive, slightly transparent
-            bg.setPen(QPen(QColor(0, 0, 0, 80), 0.5))
-            bg.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
-            self._marker_layer.addToGroup(bg)
-
             text = QGraphicsSimpleTextItem(m.label)
             text.setFont(f)
-            text.setBrush(QBrush(QColor(255, 255, 255)))  # pure white
-            text.setPen(QPen(Qt.PenStyle.NoPen))           # no outline — chip handles contrast
+            text.setBrush(QBrush(QColor(255, 255, 255)))
+            text.setPen(QPen(Qt.PenStyle.NoPen))
             text.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
-            text.setPos(text_x, text_y)
-            self._marker_layer.addToGroup(text)
+            text.setPos(scene_pos)
+            text.setTransform(QTransform.fromTranslate(r + 4, -text_h / 2))
+            group.addToGroup(text)
 
     def add_origin_crosshair(self) -> None:
         """Draw a crosshair at world (0, 0) so the user can visually verify orientation."""
@@ -179,23 +181,13 @@ class PdaView(QGraphicsView):
         f = QFont()
         f.setPointSize(9)
         f.setBold(True)
-        metrics = QFontMetricsF(f)
-        txt = "world (0,0)"
-        tw = metrics.horizontalAdvance(txt)
-        th = metrics.height()
-        tx = scene_pos.x() + size + 4
-        ty = scene_pos.y() + 2
-        bg = QGraphicsRectItem(tx - 5, ty - 2, tw + 10, th + 4)
-        bg.setBrush(QBrush(QColor(20, 25, 20, 200)))
-        bg.setPen(QPen(QColor(0, 0, 0, 80), 0.5))
-        bg.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
-        self._marker_layer.addToGroup(bg)
-        label = QGraphicsSimpleTextItem(txt)
+        label = QGraphicsSimpleTextItem("world (0,0)")
         label.setFont(f)
         label.setBrush(QBrush(QColor(255, 220, 220)))
         label.setPen(QPen(Qt.PenStyle.NoPen))
         label.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
-        label.setPos(tx, ty)
+        label.setPos(scene_pos)
+        label.setTransform(QTransform.fromTranslate(size + 4, 2))
         self._marker_layer.addToGroup(label)
 
     # ---- interaction ----

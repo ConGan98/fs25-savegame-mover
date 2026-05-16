@@ -97,8 +97,25 @@ class RunPage(QWizardPage):
                 lines.append(f"  bunker silage NOT migrated: {len(report.silos.bunkers_abandoned)} silo(s), {total:,.0f} kg")
         if report.animals:
             lines.append(f"  animals moved:  {report.animals.total_moved} into {len(report.animals.moved_by_pen)} pens")
+            if report.animals.storage_moved:
+                for tgt_uid, levels in report.animals.storage_moved.items():
+                    parts = "  ".join(f"{ft}: {lvl:,.0f}" for ft, lvl in levels.items())
+                    lines.append(f"    pen-storage to {tgt_uid[:12]}..  {parts}")
+        if report.object_storage:
+            lines.append(f"  bales/pallets moved: {report.object_storage.total_moved} into {len(report.object_storage.moved_by_target)} shed(s)")
+            for tgt_uid, n in report.object_storage.moved_by_target.items():
+                fts = report.object_storage.fill_types_by_target.get(tgt_uid, {})
+                parts = "  ".join(f"{ft}: {c}" for ft, c in fts.items())
+                lines.append(f"    {tgt_uid[:12]}..  {n} objects  ({parts})")
         if report.money and report.money.applied:
             lines.append(f"  money:          ${report.money.money:,.2f}")
+        if report.silage_sale and report.silage_sale.proceeds > 0:
+            s = report.silage_sale
+            lines.append(
+                f"  silage sold:    {s.total_litres:,.0f} L "
+                f"× ${s.price_per_litre:.4f}/L = +${s.proceeds:,.2f} "
+                f"({s.bunkers_sold} bunker(s))"
+            )
         lines.append("\nTo load this save in FS25, copy the folder contents into an empty savegameN slot under")
         lines.append("   Documents\\My Games\\FarmingSimulator2025\\savegameN\\")
         self.log.append("\n".join(lines))

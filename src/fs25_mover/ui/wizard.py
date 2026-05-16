@@ -14,11 +14,13 @@ from PySide6.QtWidgets import QWizard
 
 from ..model.migration_plan import MigrationPlan
 from ..model.poi import PoiMarker
+from ..parsers.fs25_root import Fs25RootInfo
 from ..parsers.savegame import Savegame
 
 
 @dataclass
 class WizardState:
+    fs25_root_info: Fs25RootInfo | None = None
     source_sg: Savegame | None = None
     target_sg: Savegame | None = None
     map_path: Path | None = None
@@ -28,8 +30,11 @@ class WizardState:
     vehicle_col_pitch: float = 10.0
     vehicle_row_pitch: float = 10.0
     vehicle_cols_per_row: int = 10
+    include_husbandry_storage: bool = True
+    sell_bunker_silage: bool = False
     silo_mapping: dict[str, str] = field(default_factory=dict)
     pen_mapping: dict[str, str] = field(default_factory=dict)
+    storage_mapping: dict[str, str] = field(default_factory=dict)
     output_path: Path | None = None
 
     def to_plan(self) -> MigrationPlan:
@@ -44,8 +49,11 @@ class WizardState:
             vehicle_col_pitch=self.vehicle_col_pitch,
             vehicle_row_pitch=self.vehicle_row_pitch,
             vehicle_cols_per_row=self.vehicle_cols_per_row,
+            include_husbandry_storage=self.include_husbandry_storage,
+            sell_bunker_silage=self.sell_bunker_silage,
             silo_mapping=dict(self.silo_mapping),
             pen_mapping=dict(self.pen_mapping),
+            storage_mapping=dict(self.storage_mapping),
         )
 
 
@@ -61,14 +69,14 @@ class MigrationWizard(QWizard):
         self.state = WizardState()
 
         # Import pages lazily to keep import-time small.
-        from .pages.welcome import WelcomePage
+        from .pages.setup import SetupPage
         from .pages.source import SourcePage
         from .pages.target import TargetPage
         from .pages.assign import AssignPage
         from .pages.review import ReviewPage
         from .pages.run import RunPage
 
-        self.addPage(WelcomePage(self))
+        self.addPage(SetupPage(self))
         self.addPage(SourcePage(self))
         self.addPage(TargetPage(self))
         self.addPage(AssignPage(self))

@@ -8,6 +8,8 @@ from ..parsers.savegame import Savegame
 from .animals import AnimalMigrationResult, migrate_animals
 from .items import ItemMigrationResult, migrate_items
 from .money import MoneyMigrationResult, migrate_money
+from .object_storage import ObjectStorageMigrationResult, migrate_object_storage
+from .silage_sale import SilageSaleResult, sell_silage_to_money
 from .silos import SiloMigrationResult, migrate_silos
 from .vehicles import VehicleMigrationResult, migrate_vehicles
 
@@ -19,6 +21,8 @@ class MigrationReport:
     silos: SiloMigrationResult | None
     animals: AnimalMigrationResult | None
     money: MoneyMigrationResult | None
+    object_storage: ObjectStorageMigrationResult | None
+    silage_sale: SilageSaleResult | None
     output_path: str
 
 
@@ -62,7 +66,13 @@ def apply(plan: MigrationPlan) -> MigrationReport:
         else None
     )
     ani = (
-        migrate_animals(src, tgt, plan.pen_mapping, farm_id=plan.tgt_farm_id)
+        migrate_animals(
+            src,
+            tgt,
+            plan.pen_mapping,
+            farm_id=plan.tgt_farm_id,
+            include_husbandry_storage=plan.include_husbandry_storage,
+        )
         if plan.move_animals
         else None
     )
@@ -71,8 +81,25 @@ def apply(plan: MigrationPlan) -> MigrationReport:
         if plan.move_money
         else None
     )
+    obj = (
+        migrate_object_storage(src, tgt, plan.storage_mapping, farm_id=plan.tgt_farm_id)
+        if plan.move_object_storage
+        else None
+    )
+    silage = (
+        sell_silage_to_money(src, tgt, plan.tgt_farm_id)
+        if plan.sell_bunker_silage
+        else None
+    )
 
     out = tgt.write_to(plan.output_path)
     return MigrationReport(
-        vehicles=veh, items=itm, silos=silo, animals=ani, money=mon, output_path=str(out)
+        vehicles=veh,
+        items=itm,
+        silos=silo,
+        animals=ani,
+        money=mon,
+        object_storage=obj,
+        silage_sale=silage,
+        output_path=str(out),
     )

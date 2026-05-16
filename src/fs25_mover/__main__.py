@@ -125,7 +125,7 @@ def cmd_wizard(args: argparse.Namespace) -> int:
 
     app = _qt_app()
     w = MigrationWizard()
-    w.show()
+    w.showMaximized()
     return app.exec()
 
 
@@ -138,7 +138,7 @@ def cmd_pda(args: argparse.Namespace) -> int:
         world_size=args.world_size,
         savegame_path=str(args.savegame) if args.savegame else None,
     )
-    win.show()
+    win.showMaximized()
     return app.exec()
 
 
