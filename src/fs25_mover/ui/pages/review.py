@@ -4,7 +4,6 @@ from __future__ import annotations
 from collections import Counter
 
 from PySide6.QtWidgets import (
-    QLabel,
     QTextBrowser,
     QVBoxLayout,
     QWizardPage,

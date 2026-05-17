@@ -162,9 +162,16 @@ class TargetPage(QWizardPage):
             )
 
         if state.target_sg is not None and state.map_path is not None:
+            info = getattr(state, "fs25_root_info", None)
+            mods_dir = info.mods_dir if info else None
+            install_dir = info.install_dir if info else None
             with MapSource(str(state.map_path)) as src:
                 i3d_positions = positions_for_savegame(src)
-                pois = resolve_pois(state.target_sg, src, i3d_positions=i3d_positions)
+                pois = resolve_pois(
+                    state.target_sg, src,
+                    i3d_positions=i3d_positions,
+                    mods_dir=mods_dir, install_dir=install_dir,
+                )
             state.target_pois = pois
             cats = Counter(p.category for p in pois)
             silos = [p for p in pois if p.category == "silo" and p.farm_id in (0, 1)]

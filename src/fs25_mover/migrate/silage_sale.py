@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from lxml import etree
-
 from ..parsers.savegame import Savegame
 
 

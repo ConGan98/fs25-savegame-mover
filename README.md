@@ -4,7 +4,7 @@
 > grain, food, money — from one map savegame to another, with a PDA-styled GUI
 > for picking where everything should land on the new map.
 
-![Status](https://img.shields.io/badge/status-v0.2_dev_preview-orange) ![Platform](https://img.shields.io/badge/platform-Windows-blue) ![Python](https://img.shields.io/badge/python-3.11+-green) ![License](https://img.shields.io/badge/license-MIT-yellow)
+![Version](https://img.shields.io/badge/version-1.0.0-brightgreen) ![Platform](https://img.shields.io/badge/platform-Windows-blue) ![Python](https://img.shields.io/badge/python-3.11+-green) ![License](https://img.shields.io/badge/license-MIT-yellow)
 
 ## What it does
 
@@ -64,7 +64,7 @@ The tool **remembers** your FS25 folder across launches in
 | 1 | **FS25 folder** | The tool auto-detects `Documents\My Games\FarmingSimulator2025` and lists the savegames it found. Also auto-resolves the mods directory (including `modsDirectoryOverride` in `gameSettings.xml`) and the FS25 game install (scraped from `log.txt`). Path is remembered for next launch. |
 | 2 | **Source save** | Dropdown of detected saves. Pick the one to migrate FROM. Summary shows vehicles / animals / bales / silage / money. |
 | 3 | **Target save + map** | Dropdown of fresh-ish saves (excluding the source). The map mod is **auto-resolved** to a `.zip` / unpacked folder / base-game install path. Manual Browse fallback for edge cases. |
-| 4 | **Assign destinations** | PDA viewer on the left, dropdowns on the right. Right-click the PDA to set the vehicle drop zone (terrain height auto-sampled). Pick heading, row spacing, grid width. Map each source silo / pen / auto-storage shed onto a target placeable. Toggle pen-internal storage and bunker-silage cash-out on/off. |
+| 4 | **Assign destinations** | PDA viewer on the left, dropdowns on the right. Right-click the PDA to set the vehicle drop zone (terrain height auto-sampled). Pick heading, row spacing, grid width. Map each source silo / pen / auto-storage shed onto a target placeable. Toggle pen-internal storage and bunker-silage cash-out on/off. **Dropdown options are validated** — silos show what fillTypes they accept (`[WRONG TYPE]` / `[partial — won't take WHEAT]`), animal pens show what species they accept (`[WRONG ANIMAL — accepts SHEEP]`). Compatible matches sort to the top. |
 | 5 | **Review** | Migration summary + a table of every mod the source uses. You must install matching mods on the target system before loading. |
 | 6 | **Run** | Pick an output folder (defaults to `<target>_migrated`), click **Migrate**, results log appears. |
 
@@ -101,6 +101,23 @@ Supported layouts:
 placeable names — POIs are classified by what the placeable *contains*
 (`<husbandryAnimals>` → pen, `<bunkerSilo>` / `<fillUnit>` / `<silo>` → silo,
 `<objectStorage>` → bale/pallet storage), not by English keywords.
+
+### Placeable name + capability resolution
+
+The tool reads each placeable's source XML (from the mod zip, base-game install,
+or via `xmlFilename` in the map's i3d for preplaced placeables) to derive:
+
+- **Friendly names** from `<storeData><name>` — humanised when the value is a
+  `$l10n_*` key. `<baseConfiguration>` variants (e.g. a multi-fluid tank XML
+  configured as liquid fertiliser) are resolved via the savegame's
+  `<configuration name="baseConfiguration" id="N">`.
+- **Accepted fillTypes** for silos — `fillTypes="WHEAT BARLEY..."` explicit
+  lists AND `fillTypeCategories="farmSilo"` etc. (resolved via a built-in
+  category map).
+- **Animal species** for husbandries from `<husbandry><animals type="COW">`.
+- **Auto-storage capability** for bale/pallet sheds (`<objectStorage>`
+  declared at the type level — catches empty just-placed sheds that the
+  savegame doesn't persist state for yet).
 
 ## Limitations & gotchas
 

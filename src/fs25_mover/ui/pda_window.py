@@ -6,7 +6,6 @@ on the map prints the world coords (and shows them in the status bar).
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QLabel,

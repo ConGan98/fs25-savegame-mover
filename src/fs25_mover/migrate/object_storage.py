@@ -38,20 +38,21 @@ def migrate_object_storage(
 ) -> ObjectStorageMigrationResult:
     result = ObjectStorageMigrationResult()
 
+    # Source side: only placeables that ACTUALLY have stored objects (otherwise
+    # there's nothing to move).
     src_storage = {
         p.get("uniqueId"): p
         for p in src.placeables()
         if p.find(".//objectStorage") is not None
     }
-    tgt_storage = {
-        p.get("uniqueId"): p
-        for p in tgt.placeables()
-        if p.find(".//objectStorage") is not None
-    }
+    # Target side: look up by uniqueId across ALL target placeables. FS25 only
+    # writes <objectStorage> to the savegame once something is stored, so empty
+    # auto-storage sheds appear here without the element — we'll create it.
+    tgt_all = {p.get("uniqueId"): p for p in tgt.placeables()}
 
     for src_uid, tgt_uid in storage_mapping.items():
         sp = src_storage.get(src_uid)
-        tp = tgt_storage.get(tgt_uid)
+        tp = tgt_all.get(tgt_uid)
         if sp is None or tp is None:
             result.unmatched_src.append(src_uid)
             continue

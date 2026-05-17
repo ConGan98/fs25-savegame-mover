@@ -9,7 +9,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWizard
 
 from ..model.migration_plan import MigrationPlan

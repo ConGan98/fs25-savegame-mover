@@ -15,7 +15,6 @@ file with iterparse (it can be 20MB+) and emit a {uniqueId -> (x, y, z)} map.
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import IO
 
 from lxml import etree
@@ -25,21 +24,34 @@ from .map_zip import MapSource
 
 def parse_i3d_positions(i3d_bytes: bytes) -> dict[str, tuple[float, float, float]]:
     """Return uniqueId -> (x, y, z) for every preplaced placeable found."""
+    return {uid: pos for uid, (pos, _) in _parse_stream(_BytesStream(i3d_bytes)).items()}
+
+
+def parse_i3d_pos_and_filename(i3d_bytes: bytes) -> dict[str, tuple[tuple[float, float, float], str | None]]:
+    """uniqueId -> ((x, y, z), xmlFilename).
+
+    The i3d's UserAttributes carry both `uniqueId` and `xmlFilename` for each
+    preplaced placeable — the latter is what we need to look up the placeable
+    type XML (for friendly names + accept lists) when the savegame entry has
+    no `filename` attribute.
+    """
     return _parse_stream(_BytesStream(i3d_bytes))
 
 
 def positions_for_savegame(map_src: MapSource) -> dict[str, tuple[float, float, float]]:
-    """Convenience: read the map's i3d via MapSource and return the position map.
-
-    Routes through MapSource._i3d() which handles every known map layout
-    (map/, maps/, base-game variants, mod-named .i3d files).
-    """
     i3d = map_src._i3d()
     if i3d is None:
         return {}
-    # We have the parsed root already; serialise+reparse is wasteful but matches
-    # the streaming parser's API. Cheap enough for a 20MB i3d.
     return parse_i3d_positions(etree.tostring(i3d[1]))
+
+
+def filenames_for_savegame(map_src: MapSource) -> dict[str, str]:
+    """uniqueId -> xmlFilename for every preplaced placeable on the map."""
+    i3d = map_src._i3d()
+    if i3d is None:
+        return {}
+    full = parse_i3d_pos_and_filename(etree.tostring(i3d[1]))
+    return {uid: fn for uid, (_, fn) in full.items() if fn}
 
 
 # ---------------------------------------------------------------------------
@@ -59,12 +71,12 @@ class _BytesStream:
         self._bio.close()
 
 
-def _parse_stream(stream: IO[bytes]) -> dict[str, tuple[float, float, float]]:
+def _parse_stream(stream: IO[bytes]) -> dict[str, tuple[tuple[float, float, float], str | None]]:
     node_pos: dict[str, tuple[float, float, float]] = {}     # nodeId -> xyz
     node_uid: dict[str, str] = {}                            # nodeId -> uniqueId
+    node_xmlfile: dict[str, str] = {}                        # nodeId -> xmlFilename
     current_user_attr_node: str | None = None
 
-    # iterparse with end events; clear elements as we go to keep memory flat.
     context = etree.iterparse(stream, events=("start", "end"))
     for event, el in context:
         tag = el.tag
@@ -86,21 +98,24 @@ def _parse_stream(stream: IO[bytes]) -> dict[str, tuple[float, float, float]]:
                         pass
             el.clear()
         elif tag == "Attribute":
-            if (
-                current_user_attr_node is not None
-                and el.get("name") == "uniqueId"
-                and el.get("value")
-            ):
-                node_uid[current_user_attr_node] = el.get("value")
+            if current_user_attr_node is not None:
+                name = el.get("name")
+                value = el.get("value")
+                if value:
+                    if name == "uniqueId":
+                        node_uid[current_user_attr_node] = value
+                    elif name == "xmlFilename":
+                        node_xmlfile[current_user_attr_node] = value
             el.clear()
         elif tag == "UserAttribute":
             current_user_attr_node = None
             el.clear()
 
-    # Merge: uniqueId -> position
-    out: dict[str, tuple[float, float, float]] = {}
+    # Merge: uniqueId -> (position, xmlFilename)
+    out: dict[str, tuple[tuple[float, float, float], str | None]] = {}
     for nid, uid in node_uid.items():
         pos = node_pos.get(nid)
-        if pos is not None:
-            out[uid] = pos
+        if pos is None:
+            continue
+        out[uid] = (pos, node_xmlfile.get(nid))
     return out

@@ -273,6 +273,315 @@ def _camel_to_lower(s: str) -> str:
     return s
 
 
+def read_placeable_xml_bytes(
+    filename: str,
+    mods_dir: Path | None,
+    install_dir: Path | None,
+    map_source_path: Path | None = None,
+) -> bytes | None:
+    """Resolve a savegame `<placeable filename="...">` reference to its bytes.
+
+    FS25 uses several prefix tokens:
+      * `$moddir$ModName/path/file.xml`  -> `<mods>/ModName.zip!path/file.xml`
+        or `<mods>/ModName/path/file.xml` (unpacked mod folder).
+      * `$pdlcdir$ModName/...`           -> encrypted DLC, returns None.
+      * `$mapdir$/path/file.xml`         -> inside the currently selected map.
+      * `$data/path/file.xml`            -> game install's data/path/file.xml.
+      * absolute or relative literal     -> as-is on disk.
+    """
+    if not filename:
+        return None
+    if filename.startswith("$pdlcdir$"):
+        return None  # encrypted, unreadable
+    if filename.startswith("$moddir$") and mods_dir is not None:
+        rest = filename[len("$moddir$"):]
+        mod_name, _, inner = rest.partition("/")
+        if not mod_name:
+            return None
+        zip_path = mods_dir / f"{mod_name}.zip"
+        if zip_path.is_file():
+            return _read_from_zip(zip_path, inner)
+        dir_path = mods_dir / mod_name / inner
+        return _read_file(dir_path)
+    if filename.startswith("$mapdir$") and map_source_path is not None:
+        rest = filename[len("$mapdir$"):].lstrip("/")
+        if map_source_path.is_file() and map_source_path.suffix.lower() == ".zip":
+            return _read_from_zip(map_source_path, rest)
+        return _read_file(map_source_path / rest)
+    if filename.startswith("$data/") and install_dir is not None:
+        return _read_file(install_dir / filename[1:])
+    # Bare `map/...` paths are inside the current map mod (i3d UserAttribute
+    # often emits this form for preplaced placeables shipped with the map).
+    if (filename.startswith("map/") or filename.startswith("maps/")) \
+            and map_source_path is not None:
+        if map_source_path.is_file() and map_source_path.suffix.lower() == ".zip":
+            return _read_from_zip(map_source_path, filename)
+        candidate = map_source_path / filename
+        if candidate.is_file():
+            return _read_file(candidate)
+    # Literal / fallback
+    return _read_file(Path(filename))
+
+
+def _read_file(p: Path) -> bytes | None:
+    try:
+        return p.read_bytes() if p.is_file() else None
+    except OSError:
+        return None
+
+
+def _read_from_zip(zip_path: Path, inner: str) -> bytes | None:
+    import zipfile as _zf
+    try:
+        with _zf.ZipFile(zip_path, "r") as zf:
+            return zf.read(inner)
+    except (KeyError, _zf.BadZipFile, OSError):
+        return None
+
+
+# Best-effort expansion of FS25 fillTypeCategories to fillType names.
+# Sourced from `data/maps/maps_fillTypes.xml` in the base game. Map mods can
+# override these, but the defaults cover ~95% of cases.
+_FILL_TYPE_CATEGORIES: dict[str, set[str]] = {
+    "FARMSILO": {
+        "WHEAT", "BARLEY", "OAT", "CANOLA", "MAIZE", "SOYBEAN", "SUNFLOWER",
+        "SORGHUM", "RICE", "RICELONGGRAIN", "GREEN_BEANS", "PEAS", "SPELT",
+        "RYE", "ALFALFA",
+    },
+    "GRAIN": {
+        "WHEAT", "BARLEY", "OAT", "CANOLA", "MAIZE", "SOYBEAN", "SUNFLOWER",
+        "SORGHUM", "RICE", "RICELONGGRAIN", "SPELT", "RYE", "ALFALFA",
+    },
+    "BULK": {
+        "POTATO", "SUGARBEET", "BEETROOT", "CARROT", "PARSNIP", "ONION",
+        "OLIVE", "OLIVES", "GRAPE", "COTTON", "POPLAR", "WOODCHIPS",
+        "ROOTCROP", "SUGARCANE",
+    },
+    "LIQUID": {
+        "WATER", "LIQUIDFERTILIZER", "LIQUIDMANURE", "MILK", "BUTTERMILK",
+        "DIESEL", "DEF", "ADBLUE", "WINE", "VINEGAR", "BEER",
+    },
+    "DIESEL": {"DIESEL", "DEF", "ADBLUE"},
+    "FERTILIZER": {"FERTILIZER", "LIQUIDFERTILIZER"},
+    "SEEDS": {"SEEDS"},
+    "LIME": {"LIME"},
+    "WATER": {"WATER"},
+    "MANURE": {"MANURE", "LIQUIDMANURE", "DIGESTATE"},
+    "SILAGE": {"SILAGE", "FORAGE", "MIXED_RATION"},
+    "STRAW": {"STRAW", "HAY", "GRASS_WINDROW", "DRYGRASS_WINDROW"},
+    "ANIMALFOOD": {
+        "STRAW", "HAY", "GRASS_WINDROW", "DRYGRASS_WINDROW", "SILAGE",
+        "MAIZE", "BARLEY", "WHEAT", "OAT", "FORAGE", "MIXED_RATION",
+        "MINERAL_FEED", "PIGFOOD",
+    },
+}
+
+
+def placeable_accepted_fill_types(xml_bytes: bytes | None) -> set[str] | None:
+    """Return the set of fillTypes this placeable's storage will accept.
+
+    Reads both `fillTypes="..."` (explicit list) and `fillTypeCategories="..."`
+    (category names like `farmSilo` / `bulk` / `liquid`) on `<storage>` and
+    `<bunkerSilo>` elements anywhere in the placeable's type XML.
+
+    Returns `None` if no acceptance info is declared (caller should treat as
+    "accepts anything — show in the dropdown unfiltered").
+    """
+    if xml_bytes is None:
+        return None
+    try:
+        root = etree.fromstring(xml_bytes)
+    except etree.XMLSyntaxError:
+        return None
+    accepts: set[str] = set()
+    saw_any = False
+    for s in root.iter("storage"):
+        ft = s.get("fillTypes")
+        if ft:
+            saw_any = True
+            for t in ft.split():
+                if t:
+                    accepts.add(t.upper())
+        cats = s.get("fillTypeCategories")
+        if cats:
+            saw_any = True
+            for c in cats.split():
+                accepts |= _FILL_TYPE_CATEGORIES.get(c.upper(), set())
+    for bs in root.iter("bunkerSilo"):
+        ft = bs.get("acceptedFillTypes")
+        if ft:
+            saw_any = True
+            for t in ft.split():
+                if t:
+                    accepts.add(t.upper())
+    return accepts if saw_any else None
+
+
+def placeable_friendly_name(
+    xml_bytes: bytes | None,
+    savegame_placeable=None,
+) -> str | None:
+    """Best-effort human-readable name for a placeable type.
+
+    If the placeable has `<baseConfigurations>` variants (e.g. a single
+    dieselTank01.xml file with separate Diesel / Liquid Fertiliser / Water
+    variants), the SAVEGAME's `<configuration name="baseConfiguration" id="N">`
+    picks which variant. We use that variant's storeData name when present.
+
+    Otherwise we fall back to the top-level `<storeData><name>`. `$l10n_*`
+    keys are stripped of common prefixes and humanised. Returns None if
+    nothing usable.
+    """
+    if xml_bytes is None:
+        return None
+    try:
+        root = etree.fromstring(xml_bytes)
+    except etree.XMLSyntaxError:
+        return None
+
+    raw: str | None = None
+
+    # Variant lookup via savegame's <configuration name="baseConfiguration" id="X">
+    if savegame_placeable is not None:
+        cfg_id = None
+        for cfg in savegame_placeable.findall("configuration"):
+            if (cfg.get("name") or "").lower() == "baseconfiguration":
+                cfg_id = cfg.get("id")
+                break
+        if cfg_id is not None:
+            for base_cfg in root.iter("baseConfiguration"):
+                if base_cfg.get("index") == cfg_id or base_cfg.get("id") == cfg_id:
+                    name_el = base_cfg.find("storeData/name") or base_cfg.find("name")
+                    if name_el is not None and name_el.text:
+                        raw = name_el.text.strip()
+                        break
+
+    # Fallback: top-level storeData/name
+    if raw is None:
+        name_el = root.find("storeData/name")
+        if name_el is None or not name_el.text:
+            return None
+        raw = name_el.text.strip()
+    if raw.startswith("$l10n_"):
+        rest = raw[len("$l10n_"):]
+        # Strip common Giants prefixes.
+        for prefix in ("storeItem_", "shopItem_", "placeable_", "name_",
+                       "placeableObject_", "fillType_"):
+            if rest.startswith(prefix):
+                rest = rest[len(prefix):]
+                break
+        # Generic placeholder keys like `$l10n_name` give nothing useful —
+        # let the caller fall back to filename.
+        if not rest or rest.lower() in {"name", "title", "default"}:
+            return None
+        # Lower-camel/snake -> Title Case-ish.
+        import re as _re
+        rest = _re.sub(r"([a-z])([A-Z])", r"\1 \2", rest)
+        rest = rest.replace("_", " ").strip()
+        return rest.title() if rest else None
+    return raw
+
+
+def placeable_animal_type(xml_bytes: bytes | None) -> str | None:
+    """Return the species this husbandry accepts (COW / SHEEP / PIG /
+    CHICKEN / HORSE / GOAT / WATERBUFFALO / RABBIT), or None if the placeable
+    isn't a husbandry or doesn't declare a species.
+
+    Read from `<husbandry><animals type="COW">` in the placeable type XML.
+    """
+    if xml_bytes is None:
+        return None
+    try:
+        root = etree.fromstring(xml_bytes)
+    except etree.XMLSyntaxError:
+        return None
+    for animals in root.iter("animals"):
+        t = animals.get("type")
+        if t:
+            return t.upper()
+    return None
+
+
+def animal_subtype_species(subtype: str | None) -> str | None:
+    """Map a specific subType ("COW_HOLSTEIN", "BULL_ANGUS", "RAM_LANDRACE")
+    to its species ("COW", "SHEEP", ...). Returns None if unknown."""
+    if not subtype:
+        return None
+    s = subtype.upper()
+    # Direct prefix matches.
+    for prefix, species in _SUBTYPE_PREFIX_MAP:
+        if s.startswith(prefix):
+            return species
+    # Fall back to the token before the first underscore.
+    return s.split("_", 1)[0] if "_" in s else s
+
+
+_SUBTYPE_PREFIX_MAP: tuple[tuple[str, str], ...] = (
+    ("COW_", "COW"),
+    ("BULL_", "COW"),
+    ("SHEEP_", "SHEEP"),
+    ("RAM_", "SHEEP"),
+    ("PIG_", "PIG"),
+    ("BOAR_", "PIG"),
+    ("CHICKEN_", "CHICKEN"),
+    ("ROOSTER_", "CHICKEN"),
+    ("HEN_", "CHICKEN"),
+    ("HORSE_", "HORSE"),
+    ("STALLION_", "HORSE"),
+    ("MARE_", "HORSE"),
+    ("GOAT_", "GOAT"),
+    ("BUCK_", "GOAT"),
+    ("DOE_", "GOAT"),
+    ("BUFFALO_", "WATERBUFFALO"),
+    ("WATERBUFFALO_", "WATERBUFFALO"),
+    ("RABBIT_", "RABBIT"),
+    ("DOE",   "RABBIT"),
+)
+
+
+def placeable_declares_object_storage(xml_bytes: bytes | None) -> bool:
+    """True if the placeable type-XML declares `<objectStorage>` as a child of
+    `<placeable>` — i.e. the placeable is an auto-storage shed even when empty
+    in the current savegame.
+    """
+    return _placeable_declares_capability(xml_bytes, "objectStorage")
+
+
+def placeable_declares_silo(xml_bytes: bytes | None) -> bool:
+    """True if the placeable type-XML declares silo / bunker / heap storage
+    capability — even when the savegame shows no state for it yet.
+    """
+    if xml_bytes is None:
+        return False
+    try:
+        root = etree.fromstring(xml_bytes)
+    except etree.XMLSyntaxError:
+        return False
+    if root.tag != "placeable":
+        return False
+    ptype = (root.get("type") or "").lower()
+    if ptype in {"silo", "bunkersilo", "multibunkersilo", "placeablestorageheap"}:
+        return True
+    for tag in ("silo", "bunkerSilo", "multiBunkerSilo", "placeableStorageHeap"):
+        if root.find(tag) is not None:
+            return True
+    return False
+
+
+def _placeable_declares_capability(xml_bytes: bytes | None, child_tag: str) -> bool:
+    if xml_bytes is None:
+        return False
+    try:
+        root = etree.fromstring(xml_bytes)
+    except etree.XMLSyntaxError:
+        return False
+    if root.tag != "placeable":
+        return False
+    if (root.get("type") or "").lower() == child_tag.lower():
+        return True
+    return root.find(child_tag) is not None
+
+
 def detect_install_dir_from_log(root: Path) -> Path | None:
     """Best-effort: scrape the FS25 install directory from log.txt.
 

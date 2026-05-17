@@ -5,7 +5,6 @@ appears as a row with a combo box listing all candidate target placeables.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -26,6 +25,18 @@ from ...model.poi import CATEGORY_COLOR
 from ...parsers.dds import dds_to_qimage
 from ...parsers.map_zip import MapSource
 from ..pda_view import Marker, PdaView
+
+
+def _farm_id_tag(farm_id: int | None) -> str:
+    """Short suffix annotating who owns a target placeable.
+
+    farmId 1 = your farm (no tag). 0 = unowned/buyable. Other = AI/NPC farm.
+    """
+    if farm_id == 1 or farm_id is None:
+        return ""
+    if farm_id == 0:
+        return "  [unowned — buy in-game first]"
+    return f"  [farm {farm_id} — NPC-owned, buy before use]"
 
 
 class AssignPage(QWizardPage):
@@ -149,6 +160,46 @@ class AssignPage(QWizardPage):
         # Fit after the widget has a non-zero size.
         self.view.showEvent = self._wrap_first_show(self.view.showEvent)
 
+        # --- Shared lookups for the dropdown builders ---
+        # Open the map zip once, harvest preplaced xmlFilenames from the i3d.
+        # All three section builders below reuse these caches.
+        from ...parsers.i3d import filenames_for_savegame
+        from ...parsers.fs25_root import read_placeable_xml_bytes
+        info = getattr(state, "fs25_root_info", None)
+        self._mods_dir = info.mods_dir if info else None
+        self._install_dir = info.install_dir if info else None
+        self._i3d_filenames: dict[str, str] = {}
+        try:
+            with MapSource(str(state.map_path)) as _ms:
+                self._i3d_filenames = filenames_for_savegame(_ms)
+        except (FileNotFoundError, OSError):
+            pass
+        self._tp_by_uid = {
+            (x.get("uniqueId") or ""): x for x in state.target_sg.placeables()
+        }
+        self._xml_cache: dict[str, bytes | None] = {}
+
+        def _read_xml(fn: str | None) -> bytes | None:
+            if not fn:
+                return None
+            if fn in self._xml_cache:
+                return self._xml_cache[fn]
+            data = read_placeable_xml_bytes(
+                fn, self._mods_dir, self._install_dir, state.map_path,
+            )
+            self._xml_cache[fn] = data
+            return data
+        self._read_placeable_xml = _read_xml
+
+        def _filename_for(tp) -> str | None:
+            if tp is None:
+                return None
+            fn = tp.get("filename")
+            if fn:
+                return fn
+            return self._i3d_filenames.get(tp.get("uniqueId") or "")
+        self._filename_for = _filename_for
+
         # --- Right side: dropdowns for silos, pens, and bale/pallet storage ---
         self._build_silo_section(state)
         self._build_pen_section(state)
@@ -169,7 +220,6 @@ class AssignPage(QWizardPage):
         """Row of checkboxes — one per POI category that has at least one marker.
         Defaults: silo/pen/storage = on, everything else = off."""
         from collections import Counter
-        from PySide6.QtCore import Qt
 
         counts: Counter = Counter(p.category for p in pois)
         # Stable, ordered list of categories that exist on this map.
@@ -260,10 +310,57 @@ class AssignPage(QWizardPage):
             if per_ft:
                 src_grain.append((placeable, per_ft))
 
-        target_silos = [
-            p for p in state.target_pois
-            if p.category == "silo" and (p.farm_id == 1 or p.farm_id == 0)
-        ]
+        # Build target silo list, with friendly name + accepted-fillType cache.
+        # A target appears in the dropdown if it's classified as silo OR its
+        # type XML declares silo capability. We annotate each option with
+        # ownership and the fillTypes it can accept.
+        from ...model.poi import PoiMarker
+        from ...parsers.fs25_root import (
+            placeable_accepted_fill_types,
+            placeable_declares_silo,
+            placeable_friendly_name,
+        )
+
+        _xml = self._read_placeable_xml
+        _filename_for = self._filename_for
+        tp_by_uid = self._tp_by_uid
+        poi_by_uid = {p.uid: p for p in state.target_pois}
+        candidates: list = []  # tuples (uid, fn, farm_id, label, x, z)
+        seen_uids: set[str] = set()
+        for p in state.target_pois:
+            if p.category == "silo" and p.uid not in seen_uids:
+                seen_uids.add(p.uid)
+                tp = tp_by_uid.get(p.uid)
+                fn = _filename_for(tp) if tp is not None else None
+                candidates.append((p.uid, fn, p.farm_id, p.label, p.world_x, p.world_z))
+        for tp in state.target_sg.placeables():
+            uid = tp.get("uniqueId") or ""
+            if uid in seen_uids:
+                continue
+            fn = _filename_for(tp)
+            if not placeable_declares_silo(_xml(fn)):
+                continue
+            farm_id_raw = tp.get("farmId")
+            try:
+                farm_id = int(farm_id_raw) if farm_id_raw is not None else None
+            except ValueError:
+                farm_id = None
+            candidates.append((uid, fn, farm_id, (fn or "?").rsplit("/", 1)[-1].rsplit(".", 1)[0], 0.0, 0.0))
+            seen_uids.add(uid)
+
+        # Resolve friendly name + accepts for each candidate.
+        target_silos: list[tuple[PoiMarker, set[str] | None]] = []
+        for uid, fn, farm_id, fallback_label, wx, wz in candidates:
+            data = _xml(fn)
+            tp = tp_by_uid.get(uid)
+            name = placeable_friendly_name(data, tp) or fallback_label
+            accepts = placeable_accepted_fill_types(data)
+            marker = PoiMarker(
+                uid=uid, label=name, category="silo",
+                world_x=wx, world_z=wz, farm_id=farm_id,
+            )
+            target_silos.append((marker, accepts))
+        target_silos.sort(key=lambda t: (t[0].farm_id != 1, t[0].farm_id != 0, t[0].label))
 
         box = QGroupBox("Storage silos (grain — bunker silage is NOT migrated)")
         form = QFormLayout()
@@ -273,12 +370,47 @@ class AssignPage(QWizardPage):
             for placeable, per_ft in src_grain:
                 uid = placeable.get("uniqueId") or ""
                 summary = ", ".join(f"{int(v):,} {ft}" for ft, v in per_ft.most_common())
-                fn = (placeable.get("filename", "?") or "?").rsplit("/", 1)[-1]
-                src_label = f"{fn}  ({summary})"
+                src_fn = (placeable.get("filename", "?") or "?").rsplit("/", 1)[-1]
+                src_pretty = (
+                    placeable_friendly_name(_xml(placeable.get("filename")), placeable)
+                    or src_fn.rsplit(".", 1)[0]
+                )
+                src_label = f"{src_pretty}  ({summary})"
+                # Source's stored fillTypes — used to filter targets.
+                src_fts = set(per_ft.keys())
                 combo = QComboBox()
                 combo.addItem("(skip)", "")
-                for t in target_silos:
-                    combo.addItem(f"{t.label}  ({t.world_x:.0f}, {t.world_z:.0f})", t.uid)
+                # Order: compatible matches first (everything the source needs
+                # is acceptable), then partial matches, then incompatible.
+                def _compat(t_accepts, src_set):
+                    if t_accepts is None:
+                        return 1   # unknown — middling priority, no warning
+                    if src_set <= t_accepts:
+                        return 0   # all source types accepted
+                    if src_set & t_accepts:
+                        return 2   # partial overlap
+                    return 3       # nothing accepted
+                ordered = sorted(
+                    target_silos,
+                    key=lambda t: (_compat(t[1], src_fts), t[0].farm_id != 1,
+                                   t[0].farm_id != 0, t[0].label),
+                )
+                for marker, accepts in ordered:
+                    tag = _farm_id_tag(marker.farm_id)
+                    pos_part = (
+                        f"  ({marker.world_x:.0f}, {marker.world_z:.0f})"
+                        if (marker.world_x or marker.world_z) else ""
+                    )
+                    if accepts is None:
+                        fit = "  [accepts ?]"
+                    elif src_fts <= accepts:
+                        fit = ""
+                    elif src_fts & accepts:
+                        missing = ", ".join(sorted(src_fts - accepts))[:40]
+                        fit = f"  [partial — won't take {missing}]"
+                    else:
+                        fit = "  [WRONG TYPE]"
+                    combo.addItem(f"{marker.label}{pos_part}{tag}{fit}", marker.uid)
                 combo.currentIndexChanged.connect(self._silo_changed)
                 self.silo_combos[uid] = combo
                 form.addRow(QLabel(src_label), combo)
@@ -293,7 +425,37 @@ class AssignPage(QWizardPage):
             if animals:
                 src_pens.append((placeable, animals))
 
-        target_pens = [p for p in state.target_pois if p.category == "pen"]
+        # All pens, regardless of farmId — annotated in the dropdown so the
+        # user sees who currently owns each one. Use the placeable type's
+        # storeData name when available for friendlier labels. Filename lookup
+        # falls back to the map's i3d for preplaced placeables.
+        from ...parsers.fs25_root import (
+            placeable_animal_type,
+            placeable_friendly_name,
+        )
+        from ...model.poi import PoiMarker
+
+        _xml = self._read_placeable_xml
+        _filename_for = self._filename_for
+        tp_by_uid = self._tp_by_uid
+
+        target_pens_raw = [p for p in state.target_pois if p.category == "pen"]
+        # Build (marker, species) pairs so we can filter against source pen animal type.
+        target_pens: list[tuple[PoiMarker, str | None]] = []
+        for p in target_pens_raw:
+            tp = tp_by_uid.get(p.uid)
+            fn = _filename_for(tp)
+            data = _xml(fn)
+            pretty = placeable_friendly_name(data, tp) or p.label
+            species = placeable_animal_type(data)
+            target_pens.append((
+                PoiMarker(
+                    uid=p.uid, label=pretty, category="pen",
+                    world_x=p.world_x, world_z=p.world_z, farm_id=p.farm_id,
+                ),
+                species,
+            ))
+        target_pens.sort(key=lambda t: (t[0].farm_id != 1, t[0].farm_id != 0, t[0].label))
 
         box = QGroupBox("Animal pens")
         form = QFormLayout()
@@ -329,6 +491,7 @@ class AssignPage(QWizardPage):
         self.sell_silage_check.toggled.connect(self._sell_silage_toggled)
         form.addRow(self.sell_silage_check)
 
+        from ...parsers.fs25_root import animal_subtype_species
         if not src_pens:
             form.addRow(QLabel("(No populated pens in source save.)"))
         else:
@@ -336,14 +499,51 @@ class AssignPage(QWizardPage):
                 uid = placeable.get("uniqueId") or ""
                 from collections import Counter
                 cnt = Counter()
+                species_cnt: Counter = Counter()
                 for a in animals:
-                    cnt[a.get("subType") or "?"] += int(a.get("numAnimals") or 1)
-                src_label = f"{placeable.get('filename', '?').rsplit('/', 1)[-1]}  "
-                src_label += "  ".join(f"{n}× {t}" for t, n in cnt.most_common())
+                    sub = a.get("subType") or "?"
+                    n = int(a.get("numAnimals") or 1)
+                    cnt[sub] += n
+                    sp = animal_subtype_species(sub)
+                    if sp:
+                        species_cnt[sp] += n
+                # Source pen's dominant species (e.g. cow pen w/ 1 stray sheep -> COW)
+                src_species = species_cnt.most_common(1)[0][0] if species_cnt else None
+
+                src_fn = (placeable.get('filename', '?').rsplit('/', 1)[-1])
+                src_pretty = placeable_friendly_name(
+                    _xml(placeable.get("filename")),
+                    placeable,
+                ) or src_fn.rsplit(".", 1)[0]
+                src_label = f"{src_pretty}  ({sum(cnt.values())} {src_species or 'animals'}: "
+                src_label += ", ".join(f"{n}× {t}" for t, n in cnt.most_common()) + ")"
+
+                # Sort targets: compatible-species first, then unknown, then wrong.
+                def _compat(target_species):
+                    if target_species is None:
+                        return 1            # unknown — middle priority
+                    if src_species is None:
+                        return 1            # source unknown — let user pick
+                    return 0 if target_species == src_species else 2
+                ordered = sorted(
+                    target_pens,
+                    key=lambda t: (_compat(t[1]), t[0].farm_id != 1, t[0].farm_id != 0, t[0].label),
+                )
+
                 combo = QComboBox()
                 combo.addItem("(skip)", "")
-                for t in target_pens:
-                    combo.addItem(f"{t.label}  ({t.world_x:.0f}, {t.world_z:.0f})", t.uid)
+                for marker, target_species in ordered:
+                    tag = _farm_id_tag(marker.farm_id)
+                    if target_species is None or src_species is None:
+                        fit = "  [accepts ?]" if target_species is None else ""
+                    elif target_species == src_species:
+                        fit = ""
+                    else:
+                        fit = f"  [WRONG ANIMAL — accepts {target_species}]"
+                    combo.addItem(
+                        f"{marker.label}  ({marker.world_x:.0f}, {marker.world_z:.0f}){tag}{fit}",
+                        marker.uid,
+                    )
                 combo.currentIndexChanged.connect(self._pen_changed)
                 self.pen_combos[uid] = combo
                 form.addRow(QLabel(src_label), combo)
@@ -365,32 +565,48 @@ class AssignPage(QWizardPage):
             if objs:
                 src_storage.append((p, objs))
 
-        # Target candidates: any placeable that has an <objectStorage> element
-        # (even empty). This catches placeables whose primary category is
-        # "pen" or "silo" but which ALSO act as auto-storage (e.g. multi-purpose
-        # mod sheds). We synthesize a tiny POI-like row for the dropdown.
+        # Target candidates. FS25 only writes <objectStorage> into the savegame
+        # once something is stored, so empty sheds are invisible by element
+        # alone. We also consult the placeable's source XML (from the mod zip
+        # or game install) and accept any whose type declares <objectStorage>.
+        # Result: empty player-placed sheds appear in the dropdown.
         from ...model.poi import PoiMarker
+        from ...parsers.fs25_root import (
+            placeable_declares_object_storage,
+            placeable_friendly_name,
+        )
+
+        _xml = self._read_placeable_xml
+        i3d_filenames = self._i3d_filenames
+
         target_storage = []
-        # Match each target placeable to a known POI marker (for position) when
-        # possible — otherwise use a (0,0) placeholder for the label.
         poi_by_uid = {p.uid: p for p in state.target_pois}
         for tp in state.target_sg.placeables():
-            if tp.find(".//objectStorage") is None:
-                continue
             uid = tp.get("uniqueId") or ""
-            farm_id = tp.get("farmId")
-            # Only show targets owned by farm 1 or 0 (player-accessible).
-            if farm_id not in ("1", "0"):
+            fn = tp.get("filename") or i3d_filenames.get(uid)
+            has_element = tp.find(".//objectStorage") is not None
+            if not has_element and not placeable_declares_object_storage(_xml(fn)):
                 continue
+            farm_id_raw = tp.get("farmId")
+            try:
+                farm_id = int(farm_id_raw) if farm_id_raw is not None else None
+            except ValueError:
+                farm_id = None
             existing = poi_by_uid.get(uid)
+            pretty = placeable_friendly_name(_xml(fn), tp)
             if existing is not None:
-                target_storage.append(existing)
+                target_storage.append(PoiMarker(
+                    uid=existing.uid, label=pretty or existing.label, category="storage",
+                    world_x=existing.world_x, world_z=existing.world_z,
+                    farm_id=existing.farm_id,
+                ))
             else:
-                label = (tp.get("filename") or "?").rsplit("/", 1)[-1].rsplit(".", 1)[0]
+                label = pretty or (fn or "?").rsplit("/", 1)[-1].rsplit(".", 1)[0]
                 target_storage.append(PoiMarker(
                     uid=uid, label=label, category="storage",
-                    world_x=0.0, world_z=0.0, farm_id=int(farm_id) if farm_id else None,
+                    world_x=0.0, world_z=0.0, farm_id=farm_id,
                 ))
+        target_storage.sort(key=lambda p: (p.farm_id != 1, p.farm_id != 0, p.label))
 
         box = QGroupBox("Bale / pallet storage sheds (auto-storage)")
         form = QFormLayout()
@@ -412,7 +628,12 @@ class AssignPage(QWizardPage):
                 combo = QComboBox()
                 combo.addItem("(skip)", "")
                 for t in target_storage:
-                    combo.addItem(f"{t.label}  ({t.world_x:.0f}, {t.world_z:.0f})", t.uid)
+                    tag = _farm_id_tag(t.farm_id)
+                    pos_part = (
+                        f"  ({t.world_x:.0f}, {t.world_z:.0f})"
+                        if (t.world_x or t.world_z) else ""
+                    )
+                    combo.addItem(f"{t.label}{pos_part}{tag}", t.uid)
                 combo.currentIndexChanged.connect(self._storage_changed)
                 self.storage_combos[uid] = combo
                 form.addRow(QLabel(src_label), combo)
