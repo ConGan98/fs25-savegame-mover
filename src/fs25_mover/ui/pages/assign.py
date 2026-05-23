@@ -157,6 +157,17 @@ class AssignPage(QWizardPage):
         self.view.clicked_world.connect(self._on_pda_clicked)
         self._left.insertLayout(0, toggle_row)
         self._left.insertWidget(1, self.view, 1)
+
+        # Same-map upgrade mode: vehicle drop/heading/spacing controls are
+        # meaningless because we keep source positions. Hide them and replace
+        # the drop label with an info note.
+        if state.is_same_map_upgrade:
+            self.drop_label.setText(
+                "Same-map upgrade — vehicles will stay where they were in the "
+                "source save (heading / spacing / drop-zone ignored)."
+            )
+            for w in (self.yaw_combo, self.col_spin, self.row_spin, self.cols_spin):
+                w.setEnabled(False)
         # Fit after the widget has a non-zero size.
         self.view.showEvent = self._wrap_first_show(self.view.showEvent)
 
@@ -338,7 +349,28 @@ class AssignPage(QWizardPage):
             if uid in seen_uids:
                 continue
             fn = _filename_for(tp)
-            if not placeable_declares_silo(_xml(fn)):
+            # Three ways to qualify as a silo destination:
+            #   1. type XML declares silo capability
+            #   2. has a <fillUnit><unit> element (combined husbandry+silo
+            #      placeables often store grain this way without declaring
+            #      silo capability in the type XML)
+            #   3. has a non-husbandry <storage><node> element
+            has_grain_storage = False
+            if tp.find(".//fillUnit/unit") is not None:
+                has_grain_storage = True
+            if not has_grain_storage:
+                for storage in tp.findall(".//storage"):
+                    anc = storage.getparent()
+                    under_husbandry = False
+                    while anc is not None and anc is not tp:
+                        if anc.tag == "husbandry":
+                            under_husbandry = True
+                            break
+                        anc = anc.getparent()
+                    if not under_husbandry and storage.find("node") is not None:
+                        has_grain_storage = True
+                        break
+            if not (has_grain_storage or placeable_declares_silo(_xml(fn))):
                 continue
             farm_id_raw = tp.get("farmId")
             try:
@@ -413,9 +445,21 @@ class AssignPage(QWizardPage):
                     combo.addItem(f"{marker.label}{pos_part}{tag}{fit}", marker.uid)
                 combo.currentIndexChanged.connect(self._silo_changed)
                 self.silo_combos[uid] = combo
+                self._auto_select_matching(combo, uid, state)
                 form.addRow(QLabel(src_label), combo)
         box.setLayout(form)
         self._right.addWidget(box)
+
+    def _auto_select_matching(self, combo: QComboBox, source_uid: str, state) -> None:
+        """When the source and target use the same map, pre-select the
+        target dropdown entry whose uniqueId matches the source's. Otherwise
+        leave the combo on `(skip)`."""
+        if not state.is_same_map_upgrade or not source_uid:
+            return
+        for i in range(combo.count()):
+            if combo.itemData(i) == source_uid:
+                combo.setCurrentIndex(i)
+                return
 
     def _build_pen_section(self, state) -> None:
         # Source pens with animals.
@@ -491,6 +535,15 @@ class AssignPage(QWizardPage):
         self.sell_silage_check.toggled.connect(self._sell_silage_toggled)
         form.addRow(self.sell_silage_check)
 
+        # Career statistics toggle — copies <statistics> (hectares, distance,
+        # fuel, playtime, missions, bales, etc.) from source farm to target.
+        self.stats_check = QCheckBox(
+            "Also move career statistics (hectares, distance, fuel, playtime, missions, bales, etc.)"
+        )
+        self.stats_check.setChecked(state.move_farm_statistics)
+        self.stats_check.toggled.connect(self._stats_toggled)
+        form.addRow(self.stats_check)
+
         from ...parsers.fs25_root import animal_subtype_species
         if not src_pens:
             form.addRow(QLabel("(No populated pens in source save.)"))
@@ -546,6 +599,7 @@ class AssignPage(QWizardPage):
                     )
                 combo.currentIndexChanged.connect(self._pen_changed)
                 self.pen_combos[uid] = combo
+                self._auto_select_matching(combo, uid, state)
                 form.addRow(QLabel(src_label), combo)
         box.setLayout(form)
         self._right.addWidget(box)
@@ -555,6 +609,9 @@ class AssignPage(QWizardPage):
 
     def _sell_silage_toggled(self, checked: bool) -> None:
         self._wizard.state.sell_bunker_silage = checked
+
+    def _stats_toggled(self, checked: bool) -> None:
+        self._wizard.state.move_farm_statistics = checked
 
     def _build_storage_section(self, state) -> None:
         # Source placeables with <objectStorage> that has content.
@@ -636,6 +693,7 @@ class AssignPage(QWizardPage):
                     combo.addItem(f"{t.label}{pos_part}{tag}", t.uid)
                 combo.currentIndexChanged.connect(self._storage_changed)
                 self.storage_combos[uid] = combo
+                self._auto_select_matching(combo, uid, state)
                 form.addRow(QLabel(src_label), combo)
             if not target_storage:
                 form.addRow(QLabel(
@@ -671,5 +729,9 @@ class AssignPage(QWizardPage):
 
     def isComplete(self) -> bool:
         # Don't gate on dropdowns — user may legitimately skip all silos/pens.
-        # Just require a drop zone so vehicles aren't dumped at (0,0,0).
-        return self._wizard.state.drop_xyz is not None
+        # Cross-map: need a drop zone so vehicles aren't dumped at (0,0,0).
+        # Same-map: vehicles keep their source positions, drop zone irrelevant.
+        state = self._wizard.state
+        if state.is_same_map_upgrade:
+            return True
+        return state.drop_xyz is not None

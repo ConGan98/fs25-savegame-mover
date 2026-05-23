@@ -4,7 +4,7 @@
 > grain, food, money — from one map savegame to another, with a PDA-styled GUI
 > for picking where everything should land on the new map.
 
-![Version](https://img.shields.io/badge/version-1.0.0-brightgreen) ![Platform](https://img.shields.io/badge/platform-Windows-blue) ![Python](https://img.shields.io/badge/python-3.11+-green) ![License](https://img.shields.io/badge/license-MIT-yellow)
+![Version](https://img.shields.io/badge/version-1.1.0-brightgreen) ![Platform](https://img.shields.io/badge/platform-Windows-blue) ![Python](https://img.shields.io/badge/python-3.11+-green) ![License](https://img.shields.io/badge/license-MIT-yellow)
 
 ## What it does
 
@@ -29,6 +29,17 @@ overview.
 - Loose grain / diesel / fertiliser / seeds / lime stored in silos — both
   `<fillUnit><unit>` and `<silo><storage><node>` shapes
 - Farm money and loans
+- **Career statistics** — workedHectares, playTime, traveledDistance, fuelUsage,
+  baleCount, missionCount, revenue, expenses, etc. (per-save animal-id counters
+  are deliberately left alone). Toggle on the Assign page; defaults on.
+- **Mod-specific savegame files** — opt-in checklist auto-detects files like
+  `RedTape.xml`, `rm_RlAnimalSystem.xml` (Realistic Livestock genetics),
+  `easyDevControls.xml`, etc. Map-bound files (Courseplay, AutoDrive,
+  precisionFarming, mapObjectsHider) are listed but default OFF on cross-map
+  runs since their world coords don't survive a new map.
+- **Mod dependency list** — source's required mods are merged into the new
+  save's `careerSavegame.xml` so FS25 prompts the user to activate them on
+  first load.
 
 **Doesn't migrate:**
 
@@ -38,7 +49,8 @@ overview.
   proceeds to the target farm's money instead of losing it.
 - Placeables you've bought (sheds, silos, animal pens) — re-purchase on the
   new map. You can then migrate animals / grain / bales INTO them via the
-  wizard.
+  wizard. **(Exception: in same-map upgrade mode the entire player-placed
+  placeable is copied wholesale with all its content — see below.)**
 
 ## Quick start
 
@@ -49,7 +61,7 @@ overview.
    the new map.
 3. Double-click `FS25SavegameMover.exe`. The wizard opens maximised
    (10–15 s on first launch — PyInstaller unpacking).
-4. Walk through the 6 wizard pages (see below).
+4. Walk through the 7 wizard pages (see below).
 5. Migrate. The tool writes a **new** savegame folder — your originals are
    never touched. Copy the new folder into an empty `savegameN` slot under
    `Documents\My Games\FarmingSimulator2025\` to load it in-game.
@@ -63,10 +75,11 @@ The tool **remembers** your FS25 folder across launches in
 |---|---|---|
 | 1 | **FS25 folder** | The tool auto-detects `Documents\My Games\FarmingSimulator2025` and lists the savegames it found. Also auto-resolves the mods directory (including `modsDirectoryOverride` in `gameSettings.xml`) and the FS25 game install (scraped from `log.txt`). Path is remembered for next launch. |
 | 2 | **Source save** | Dropdown of detected saves. Pick the one to migrate FROM. Summary shows vehicles / animals / bales / silage / money. |
-| 3 | **Target save + map** | Dropdown of fresh-ish saves (excluding the source). The map mod is **auto-resolved** to a `.zip` / unpacked folder / base-game install path. Manual Browse fallback for edge cases. |
-| 4 | **Assign destinations** | PDA viewer on the left, dropdowns on the right. Right-click the PDA to set the vehicle drop zone (terrain height auto-sampled). Pick heading, row spacing, grid width. Map each source silo / pen / auto-storage shed onto a target placeable. Toggle pen-internal storage and bunker-silage cash-out on/off. **Dropdown options are validated** — silos show what fillTypes they accept (`[WRONG TYPE]` / `[partial — won't take WHEAT]`), animal pens show what species they accept (`[WRONG ANIMAL — accepts SHEEP]`). Compatible matches sort to the top. |
+| 3 | **Target save + map** | Dropdown of fresh-ish saves (excluding the source). The map mod is **auto-resolved** to a `.zip` / unpacked folder / base-game install path. Manual Browse fallback for edge cases. If both saves share the same `mapId`, a **same-map version upgrade** banner appears and the wizard flips defaults to "preserve everything" (see below). |
+| 4 | **Assign destinations** | PDA viewer on the left, dropdowns on the right. Right-click the PDA to set the vehicle drop zone (terrain height auto-sampled). Pick heading, row spacing, grid width. Map each source silo / pen / auto-storage shed onto a target placeable. Toggle pen-internal storage, bunker-silage cash-out, and career-stats migration on/off. **Dropdown options are validated** — silos show what fillTypes they accept (`[WRONG TYPE]` / `[partial — won't take WHEAT]`), animal pens show what species they accept (`[WRONG ANIMAL — accepts SHEEP]`). Compatible matches sort to the top. |
 | 5 | **Review** | Migration summary + a table of every mod the source uses. You must install matching mods on the target system before loading. |
-| 6 | **Run** | Pick an output folder (defaults to `<target>_migrated`), click **Migrate**, results log appears. |
+| 6 | **Mod files** | Checklist of mod-specific save files detected in the source — RedTape, Realistic Livestock, etc. pre-checked under "Safe mod data"; Courseplay / AutoDrive / precisionFarming / mapObjectsHider listed but unchecked under "Map-bound" (terrain-tied — they break on a new map). In **same-map mode** the map-bound files default checked. |
+| 7 | **Run** | Pick an output folder (defaults to `<target>_migrated`), click **Migrate**, results log appears. |
 
 ### PDA viewer
 
@@ -118,6 +131,30 @@ or via `xmlFilename` in the map's i3d for preplaced placeables) to derive:
 - **Auto-storage capability** for bale/pallet sheds (`<objectStorage>`
   declared at the type level — catches empty just-placed sheds that the
   savegame doesn't persist state for yet).
+
+## Same-map version upgrade mode
+
+When the source and target savegames reference the **same `mapId`** (e.g. you
+were running v1.0 of a map mod, the author released v1.1 with savegame-breaking
+changes, and you've started a fresh save on v1.1), the wizard detects this and
+flips its defaults to preserve everything the new map version can still handle:
+
+- An orange **"Same-map version upgrade detected"** banner appears on the
+  Target page.
+- **Vehicle positions are preserved** — every vehicle, hitched implement, and
+  multi-component rig keeps its exact source coordinates. The drop-zone /
+  heading / spacing controls on the Assign page are hidden.
+- **Player-placed placeables are copied wholesale** — your built silos, sheds,
+  pens, and the animals / grain / bales / pallets inside them are deep-copied
+  into the target save. No re-purchasing on the new map version.
+- **Silo / pen / storage dropdowns auto-pre-select** the matching uniqueId on
+  the target (when present), since same-map preplaced placeables retain their
+  IDs across versions.
+- **Map-bound mod files default ON** on the Mod files page (Courseplay courses,
+  AutoDrive routes, precisionFarming nutrient maps, mapObjectsHider state, etc.)
+  since the underlying terrain hasn't changed.
+
+Cross-map runs are unaffected by these flips.
 
 ## Limitations & gotchas
 
@@ -186,6 +223,7 @@ src/fs25_mover/
 │   ├── fs25_root.py         FS25 root + savegame + mods + install discovery
 │   ├── map_zip.py           Map mod (.zip or folder) — overview, i3d, heightmap, hotspots
 │   ├── i3d.py               Streaming i3d parser → uniqueId → world position
+│   ├── mod_files.py         Mod-file detection + safe/terrain/binary classification
 │   └── dds.py               DDS → QImage via Pillow
 ├── model/
 │   ├── farm.py              FarmSnapshot — derived view of a savegame
@@ -199,7 +237,10 @@ src/fs25_mover/
 │   ├── object_storage.py    Bale/pallet auto-storage (<objectStorage>)
 │   ├── silage_sale.py       Optional bunker-silage cash-out
 │   ├── items.py             items.xml (bales, pallets, world items)
-│   ├── money.py             farms.xml money + loan transfer
+│   ├── money.py             farms.xml money + loan + career-statistics transfer
+│   ├── placeables.py        Same-map: wholesale player-placeable copy
+│   ├── mod_files.py         Copy detected mod-specific files (RedTape, RL, etc.)
+│   ├── mods_list.py         Merge source's <mod> deps into target's careerSavegame
 │   └── ids.py               uniqueId collision handling
 ├── ui/
 │   ├── wizard.py            QWizard + WizardState

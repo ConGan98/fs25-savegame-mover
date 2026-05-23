@@ -51,6 +51,10 @@ def migrate_object_storage(
     tgt_all = {p.get("uniqueId"): p for p in tgt.placeables()}
 
     for src_uid, tgt_uid in storage_mapping.items():
+        # Same-map upgrade copies the source placeable verbatim. Skip identity
+        # mappings so bales/pallets aren't doubled.
+        if src_uid == tgt_uid:
+            continue
         sp = src_storage.get(src_uid)
         tp = tgt_all.get(tgt_uid)
         if sp is None or tp is None:

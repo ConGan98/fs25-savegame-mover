@@ -1,6 +1,6 @@
 [project]
 name = "fs25-savegame-mover"
-version = "1.0.0"
+version = "1.1.0"
 description = "Migrate a Farming Simulator 25 farm (vehicles, animals, grain, bales, money) from one map savegame to another, via a PDA-styled GUI."
 readme = "README.md"
 license = { file = "LICENSE" }

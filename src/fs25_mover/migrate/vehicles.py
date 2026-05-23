@@ -35,9 +35,14 @@ def migrate_vehicles(
     col_pitch: float = 10.0,
     row_pitch: float = 10.0,
     cols_per_row: int = 10,
+    preserve_positions: bool = False,
 ) -> VehicleMigrationResult:
     """Migrate vehicles owned by `src_farm_id`. Other farms' vehicles
     (display/showcase units, AI farms, mod farms) are left behind.
+
+    When `preserve_positions=True` (same-map version upgrade), each cloned
+    vehicle keeps its source position/rotation and attached implements stay
+    hitched. The grid-layout / drop-zone / heading inputs are ignored.
     """
     src_root = src.root("vehicles.xml")
     tgt_root = tgt.root("vehicles.xml")
@@ -49,6 +54,21 @@ def migrate_vehicles(
     skipped = len(all_src) - len(src_vehicles)
     taken = collect_ids(tgt_root)
     remap = remap_collisions(src_vehicles, taken)
+
+    # Same-map: just clone each vehicle with its original world state intact.
+    # Skip the grid placement and the implement detach — both are workarounds
+    # for cross-map issues that don't apply here.
+    if preserve_positions:
+        moved = 0
+        for v in src_vehicles:
+            clone = copy.deepcopy(v)
+            old_uid = clone.get("uniqueId")
+            if old_uid and old_uid in remap:
+                clone.set("uniqueId", remap[old_uid])
+            clone.set("farmId", str(farm_id))
+            tgt_root.append(clone)
+            moved += 1
+        return VehicleMigrationResult(moved=moved, skipped=skipped, remap=remap)
 
     # Placement: vehicle 0 sits exactly on drop_xyz. Subsequent vehicles step
     # 3m to the LEFT of the chosen heading (perpendicular to facing direction)

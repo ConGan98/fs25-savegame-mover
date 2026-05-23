@@ -59,6 +59,11 @@ def migrate_silos(
                 result.bunkers_abandoned.append((sp.get("uniqueId") or "", lvl))
 
     for src_uid, tgt_uid in silo_mapping.items():
+        # Same-map upgrade copies the source placeable verbatim into target.
+        # The auto-fill then maps source uid X -> target uid X. Merging now
+        # would double-count the silo content, so skip identity mappings.
+        if src_uid == tgt_uid:
+            continue
         src_p = src_by_uid.get(src_uid)
         tgt_p = tgt_by_uid.get(tgt_uid)
         if src_p is None or tgt_p is None:

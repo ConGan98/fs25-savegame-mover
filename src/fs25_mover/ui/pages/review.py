@@ -50,8 +50,15 @@ class ReviewPage(QWizardPage):
         lines = []
         lines.append("<h3>Migration plan</h3>")
         lines.append("<ul>")
-        lines.append(f"<li><b>Vehicles:</b> {src_snap.vehicle_count} (dropped at "
-                     f"{state.drop_xyz[0]:.0f}, {state.drop_xyz[2]:.0f})</li>")
+        if state.preserve_vehicle_positions:
+            placement = "kept at source positions (same-map upgrade)"
+        elif state.drop_xyz is not None:
+            placement = (
+                f"dropped at {state.drop_xyz[0]:.0f}, {state.drop_xyz[2]:.0f}"
+            )
+        else:
+            placement = "no drop zone set"
+        lines.append(f"<li><b>Vehicles:</b> {src_snap.vehicle_count} ({placement})</li>")
         lines.append(f"<li><b>Bales/items:</b> {src_snap.item_count}</li>")
         lines.append(f"<li><b>Silo grain mappings:</b> {len(state.silo_mapping)} "
                      f"(loose-grain storage only; bunker silage is skipped)</li>")

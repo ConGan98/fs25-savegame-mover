@@ -21,6 +21,7 @@ class MigrationPlan:
     move_silos: bool = True
     move_animals: bool = True
     move_money: bool = True
+    move_farm_statistics: bool = True
     move_object_storage: bool = True
 
     # Vehicle / item drop zone on the new map (world coords). drop_xyz.y should
@@ -29,6 +30,15 @@ class MigrationPlan:
     drop_xyz: tuple[float, float, float] = (0.0, 100.0, 0.0)
     # Heading (degrees) every vehicle is rotated to face. 0 = facing -Z (north).
     vehicle_yaw_deg: float = 0.0
+    # Same-map-upgrade mode: keep every vehicle exactly where the player left it
+    # in the source save. Skips the grid layout AND the attached-implement detach
+    # step (hitches still valid because the world hasn't changed).
+    preserve_vehicle_positions: bool = False
+    # Same-map-upgrade mode: also copy the player's player-placed <placeable>
+    # entries (silos, sheds, pens they bought) into the target. Subsequent
+    # silo/animal/storage merges treat source-uid==target-uid as a no-op so
+    # content isn't doubled. Unsafe in cross-map mode — leave default False.
+    copy_player_placeables: bool = False
     # Spacing (metres) between vehicles in the placement grid.
     # col_pitch = side-to-side gap. row_pitch = front-to-back gap. Defaults are
     # generous (5m / 8m) to accommodate combines and trailered implements.
@@ -52,6 +62,11 @@ class MigrationPlan:
     pen_mapping: dict[str, str] = field(default_factory=dict)
     # Auto-storage sheds (bales / pallets stored inside <objectStorage>).
     storage_mapping: dict[str, str] = field(default_factory=dict)
+
+    # Mod-specific savegame files to copy from source to the migrated output
+    # (e.g. RedTape.xml, rm_RlAnimalSystem.xml). User picks per file in the
+    # wizard's Mod files page. Source wins over any target equivalent.
+    mod_file_includes: list[str] = field(default_factory=list)
 
     # Farm ids
     src_farm_id: int = 1

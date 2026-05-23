@@ -54,6 +54,10 @@ def migrate_animals(
     tgt_all = {p.get("uniqueId"): p for p in tgt.placeables()}
 
     for src_uid, tgt_uid in pen_mapping.items():
+        # Same-map upgrade copies the source placeable verbatim. Skip identity
+        # mappings so animals + husbandry storage aren't doubled.
+        if src_uid == tgt_uid:
+            continue
         src_pen = src_pens.get(src_uid)
         tgt_pen = tgt_all.get(tgt_uid)
         if src_pen is None or tgt_pen is None:

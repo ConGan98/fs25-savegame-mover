@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QWizardPage,
 )
 
+from ...migrate.placeables import copy_player_placeables
 from ...model.farm import FarmSnapshot
 from ...model.poi import resolve_pois
 from ...parsers.fs25_root import resolve_map_mod_for
@@ -148,6 +149,30 @@ class TargetPage(QWizardPage):
     def _refresh_summary(self) -> None:
         state = self._wizard.state
         lines = []
+
+        # Auto-detect same-map version upgrade: flip the preserve flag so the
+        # rest of the wizard (Assign, Mod files) and engine pick it up. Done
+        # here because both savegames are loaded by the time we render.
+        if state.is_same_map_upgrade:
+            state.preserve_vehicle_positions = True
+            state.copy_player_placeables = True
+            map_id = state.source_sg.map_id if state.source_sg else "?"
+            lines.append(
+                "<p style='background:#243d24; color:#ff9b1c; padding:8px; "
+                "border:1px solid #ff9b1c; border-radius:4px;'>"
+                "<b>Same-map version upgrade detected</b> — both saves use "
+                f"<code>{map_id}</code>.<br>"
+                "Vehicles will keep their original positions. "
+                "Player-placed placeables (your silos, sheds, pens) will be "
+                "copied across with all their content. Terrain-bound mod files "
+                "(Courseplay, AutoDrive, precisionFarming) will default to ON."
+                "</p>"
+            )
+        else:
+            # User went back and changed target to a different map — undo flips.
+            state.preserve_vehicle_positions = False
+            state.copy_player_placeables = False
+
         if state.target_sg is not None:
             snap = FarmSnapshot.from_savegame(state.target_sg)
             lines.append(f"<h3>Target save: {snap.map_title or '(unknown)'}</h3>")
@@ -160,6 +185,27 @@ class TargetPage(QWizardPage):
                 + ", ".join(f"farm {fid} = ${m:,.0f}" for fid, m in snap.farm_money.items())
                 + "</p>"
             )
+
+        # In same-map mode the engine will copy source's player-placed
+        # placeables into target at migration time. Mirror that into the
+        # target_sg's in-memory placeables tree NOW so the Assign page sees
+        # them as dropdown options and POI markers. This is purely a UI
+        # preview — the engine reloads the target fresh from disk and copies
+        # placeables itself, so on-disk state is untouched.
+        # Guard against re-entry: _refresh_summary runs on every Back→Forward
+        # cycle. The uid dedupe inside copy_player_placeables means we won't
+        # double-add the same placeable, but resolve_pois would still re-walk
+        # the same augmented tree wastefully and any uid-less placeable would
+        # re-append. Stamp the target tree so we only augment once per load.
+        if (
+            state.is_same_map_upgrade
+            and state.copy_player_placeables
+            and state.source_sg is not None
+            and state.target_sg is not None
+            and not getattr(state.target_sg, "_placeables_augmented", False)
+        ):
+            copy_player_placeables(state.source_sg, state.target_sg)
+            state.target_sg._placeables_augmented = True
 
         if state.target_sg is not None and state.map_path is not None:
             info = getattr(state, "fs25_root_info", None)

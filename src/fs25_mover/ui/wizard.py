@@ -31,10 +31,25 @@ class WizardState:
     vehicle_cols_per_row: int = 10
     include_husbandry_storage: bool = True
     sell_bunker_silage: bool = False
+    move_farm_statistics: bool = True
+    preserve_vehicle_positions: bool = False
+    copy_player_placeables: bool = False
     silo_mapping: dict[str, str] = field(default_factory=dict)
     pen_mapping: dict[str, str] = field(default_factory=dict)
     storage_mapping: dict[str, str] = field(default_factory=dict)
+    mod_file_includes: list[str] = field(default_factory=list)
     output_path: Path | None = None
+
+    @property
+    def is_same_map_upgrade(self) -> bool:
+        """True when source and target reference the same map mod by mapId.
+        In this mode the wizard pre-fills mappings, keeps vehicle positions,
+        and defaults terrain-bound mod files to ON."""
+        if self.source_sg is None or self.target_sg is None:
+            return False
+        src_id = self.source_sg.map_id
+        tgt_id = self.target_sg.map_id
+        return bool(src_id and tgt_id and src_id == tgt_id)
 
     def to_plan(self) -> MigrationPlan:
         assert self.source_sg and self.target_sg and self.output_path
@@ -50,9 +65,13 @@ class WizardState:
             vehicle_cols_per_row=self.vehicle_cols_per_row,
             include_husbandry_storage=self.include_husbandry_storage,
             sell_bunker_silage=self.sell_bunker_silage,
+            move_farm_statistics=self.move_farm_statistics,
+            preserve_vehicle_positions=self.preserve_vehicle_positions,
+            copy_player_placeables=self.copy_player_placeables,
             silo_mapping=dict(self.silo_mapping),
             pen_mapping=dict(self.pen_mapping),
             storage_mapping=dict(self.storage_mapping),
+            mod_file_includes=list(self.mod_file_includes),
         )
 
 
@@ -73,6 +92,7 @@ class MigrationWizard(QWizard):
         from .pages.target import TargetPage
         from .pages.assign import AssignPage
         from .pages.review import ReviewPage
+        from .pages.modfiles import ModFilesPage
         from .pages.run import RunPage
 
         self.addPage(SetupPage(self))
@@ -80,4 +100,5 @@ class MigrationWizard(QWizard):
         self.addPage(TargetPage(self))
         self.addPage(AssignPage(self))
         self.addPage(ReviewPage(self))
+        self.addPage(ModFilesPage(self))
         self.addPage(RunPage(self))

@@ -108,6 +108,12 @@ class RunPage(QWizardPage):
                 lines.append(f"    {tgt_uid[:12]}..  {n} objects  ({parts})")
         if report.money and report.money.applied:
             lines.append(f"  money:          ${report.money.money:,.2f}")
+        if report.farm_stats and report.farm_stats.applied:
+            skipped = (
+                f"  (skipped per-save IDs: {', '.join(report.farm_stats.skipped_fields)})"
+                if report.farm_stats.skipped_fields else ""
+            )
+            lines.append(f"  career stats:   {report.farm_stats.fields_copied} fields copied{skipped}")
         if report.silage_sale and report.silage_sale.proceeds > 0:
             s = report.silage_sale
             lines.append(
@@ -115,6 +121,24 @@ class RunPage(QWizardPage):
                 f"× ${s.price_per_litre:.4f}/L = +${s.proceeds:,.2f} "
                 f"({s.bunkers_sold} bunker(s))"
             )
+        if report.player_placeables and report.player_placeables.copied_uids:
+            n = len(report.player_placeables.copied_uids)
+            lines.append(f"  placeables copied (same-map mode): {n}")
+        if report.mods_list and report.mods_list.added:
+            lines.append(f"  mod dependencies added to save: {len(report.mods_list.added)}")
+            lines.append("    (FS25 will prompt to activate these on first load)")
+        if report.mod_files:
+            mf = report.mod_files
+            if mf.copied:
+                lines.append(f"  mod files:      {len(mf.copied)} copied")
+                for name in mf.copied:
+                    lines.append(f"    {name}")
+            if mf.skipped_missing:
+                lines.append(f"  mod files (ticked but not in source, skipped):")
+                for name in mf.skipped_missing:
+                    lines.append(f"    {name}")
+            if mf.error:
+                lines.append(f"  mod files ERROR: {mf.error}")
         lines.append("\nTo load this save in FS25, copy the folder contents into an empty savegameN slot under")
         lines.append("   Documents\\My Games\\FarmingSimulator2025\\savegameN\\")
         self.log.append("\n".join(lines))
